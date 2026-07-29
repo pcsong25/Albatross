@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .. import ops
 from ..agents.base import CallMeta
@@ -73,12 +73,38 @@ class ProposedChild(BaseModel):
 
 
 class Decomposition(BaseModel):
+    """Either a decomposition, or a reasoned refusal to produce one.
+
+    The refusal is the point of the ``verdict`` field. Splitting a lemma that is
+    already one step is not free: it costs a long call, and it leaves the user
+    pruning nodes that should never have existed. Asking the model to judge that
+    first — and to say so instead of inventing three children — is cheaper than
+    any amount of prompt scolding about granularity.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
-    strategy: str = Field(description="one line naming the shape of the argument")
-    children: list[ProposedChild] = Field(min_length=3, max_length=7)
+    verdict: Literal["decompose", "prove-directly", "already-atomic"] = Field(
+        description="`decompose` if this node is worth breaking up. "
+        "`prove-directly` if the argument is clear enough to just write out. "
+        "`already-atomic` if it is a single step and splitting would only add "
+        "bookkeeping."
+    )
+    assessed_difficulty: Literal["standard", "routine", "hard", "unknown"] = Field(
+        description="your judgement of THIS node, not of its children"
+    )
+    assessment: str = Field(
+        description="two or three sentences: how hard this is and why, and — if you "
+        "are not decomposing — the shape of the argument you would write instead"
+    )
+    strategy: str = Field(
+        default="", description="one line naming the shape of the argument"
+    )
+    children: list[ProposedChild] = Field(default_factory=list, max_length=7)
     reduction_proof: str = Field(
-        description="the parent's proof, citing each child by `slug` in backticks"
+        default="",
+        description="the parent's proof, citing each child by `slug` in backticks. "
+        "Required when the verdict is `decompose`.",
     )
     uses: dict[str, UseSpec] = Field(
         default_factory=dict, description="keyed by child slug"
@@ -88,6 +114,22 @@ class Decomposition(BaseModel):
         description="reservations, missing hypotheses, why this decomposition may "
         "be wrong — the user wants to hear these",
     )
+
+    @model_validator(mode="after")
+    def _shape_matches_verdict(self) -> "Decomposition":
+        if self.verdict == "decompose":
+            if not 3 <= len(self.children) <= 7:
+                raise ValueError(
+                    "a `decompose` verdict needs between 3 and 7 children; return "
+                    "`prove-directly` or `already-atomic` if it does not deserve that many"
+                )
+            if not self.reduction_proof.strip():
+                raise ValueError("a `decompose` verdict needs a reduction_proof")
+        return self
+
+    @property
+    def decomposing(self) -> bool:
+        return self.verdict == "decompose"
 
 
 @dataclass
@@ -99,17 +141,42 @@ class ExpandResult:
     calls: list[CallMeta] = field(default_factory=list)
     rounds: int = 1
     archived_to: Path | None = None
+    #: Set when the decomposer judged the node not worth decomposing and nothing
+    #: was written. The user decides what happens next.
+    declined: bool = False
 
     @property
     def clean(self) -> bool:
         return not any(d.severity == "error" for d in self.diagnostics)
 
+    @property
+    def verdict(self) -> str:
+        return self.decomposition.verdict if self.decomposition else "decompose"
+
+    @property
+    def assessment(self) -> str:
+        return self.decomposition.assessment if self.decomposition else ""
+
 
 # --- prompt assembly ----------------------------------------------------------
 
 
-def build_prompt(graph: Graph, node: Node, hint: str | None) -> str:
+FORCE_BLOCK = """## The user has overruled your assessment
+
+You have already judged this node not worth decomposing, and the mathematician
+has asked for a decomposition anyway. They can see your reasoning and have
+decided otherwise; it is their problem and their call.
+
+Return `verdict: "decompose"` with between 3 and 7 children, a reduction proof
+and a complete `uses` table. If the natural split is into few, small pieces, say
+so in `notes` — but produce the decomposition."""
+
+
+def build_prompt(
+    graph: Graph, node: Node, hint: str | None, project=None, force: bool = False
+) -> str:
     blocks = [
+        context.preamble_block(project) if project is not None else "",
         context.setting(graph, node),
         context.node_block(node, heading="The node to decompose"),
         context.siblings_available(graph, node),
@@ -120,6 +187,8 @@ def build_prompt(graph: Graph, node: Node, hint: str | None) -> str:
             "problem. Take it seriously; it is worth more than your own first "
             f"instinct about the strategy.\n\n{hint.strip()}"
         )
+    if force:
+        blocks.append(FORCE_BLOCK)
     return context.join(*blocks)
 
 
@@ -247,8 +316,15 @@ def expand(
     registry: Registry | None = None,
     repair_rounds: int = 2,
     apply: bool = True,
+    force: bool = False,
 ) -> ExpandResult:
-    """Decompose one node, one level, repairing against the discharge check."""
+    """Decompose one node, one level, repairing against the discharge check.
+
+    The decomposer may decline. When it judges the node too easy to be worth
+    splitting it returns a verdict and an assessment instead of children, nothing
+    is written, and the caller is left to choose — write the proof, or press on
+    with ``force=True``.
+    """
     registry = registry or Registry(project)
     agent = registry.agent("decomposer")
     system = context.load_prompt("decompose")
@@ -265,7 +341,7 @@ def expand(
             "Use `bp redo` to archive them and decompose again."
         )
 
-    user = build_prompt(graph, node, hint)
+    user = build_prompt(graph, node, hint, project, force)
     calls: list[CallMeta] = []
     decomposition: Decomposition | None = None
     diagnostics: list[Diagnostic] = []
@@ -278,6 +354,45 @@ def expand(
             system, user, Decomposition, timeout=registry.config.role("decomposer").timeout
         )
         calls.append(meta)
+
+        if not decomposition.decomposing and force:
+            # Overruled, and it declined anyway. Do not write an empty
+            # decomposition — say so and let the repair round press the point.
+            diagnostics = [
+                warn(
+                    "DEC001",
+                    node,
+                    f"the decomposer returned `{decomposition.verdict}` even though a "
+                    "decomposition was demanded: " + decomposition.assessment,
+                )
+            ]
+            if attempt == repair_rounds:
+                return ExpandResult(
+                    node=node_id, children=[], decomposition=decomposition,
+                    diagnostics=diagnostics, calls=calls, rounds=rounds, declined=True,
+                )
+            user = context.join(
+                build_prompt(graph, node, hint, project, force=True),
+                "Your previous reply declined again. Return a decomposition.",
+            )
+            continue
+
+        if not decomposition.decomposing and not force:
+            # It judged the node not worth splitting. Stop here: writing children
+            # it does not believe in would be worse than the wait.
+            result = ExpandResult(
+                node=node_id, children=[], decomposition=decomposition,
+                calls=calls, rounds=rounds, declined=True,
+            )
+            if apply:
+                ops.add_note(
+                    project, node_id,
+                    f"Decomposer declined to split this ({decomposition.verdict}, "
+                    f"assessed {decomposition.assessed_difficulty}): "
+                    f"{decomposition.assessment}",
+                    actor="decomposer",
+                )
+            return result
 
         ids = assign_ids(graph, node, decomposition)
         candidate, parent = candidate_graph(graph, node, decomposition, ids)
@@ -297,7 +412,7 @@ def expand(
         if attempt == repair_rounds:
             break
         user = context.join(
-            build_prompt(graph, node, hint),
+            build_prompt(graph, node, hint, project, force),
             context.diagnostics_block(
                 diagnostics, "Your previous decomposition was rejected"
             ),
@@ -455,6 +570,13 @@ def redo(
 
 
 def summarise(result: ExpandResult) -> str:
+    if result.declined:
+        d = result.decomposition
+        return "\n".join([
+            f"{result.node}: not decomposed ({d.verdict}, assessed {d.assessed_difficulty})",
+            f"  {d.assessment}",
+            "  Nothing was written. Generate a proof, relabel it, or expand with --force.",
+        ])
     lines = [
         f"{result.node}: {len(result.children)} child(ren) in {result.rounds} round(s)"
     ]

@@ -41,6 +41,9 @@ def decomposition(*, discharges_complete=True, slugs=("step-one", "step-two", "s
     if not discharges_complete:
         uses[slugs[1]]["discharges"] = {}
     return {
+        "verdict": "decompose",
+        "assessed_difficulty": "hard",
+        "assessment": "Three genuinely separate steps.",
         "strategy": "reduce to an ODE inequality at the origin",
         "children": [child(s) for s in slugs],
         "reduction_proof": "By "
@@ -206,6 +209,60 @@ class TestDecompose:
         too_few = decomposition(slugs=("a", "b"))
         with pytest.raises(ValidationError):
             decompose_role.Decomposition(**too_few)
+
+
+class TestTriage:
+    """The decomposer judges difficulty first and may decline to split."""
+
+    def _declined(self, verdict="already-atomic", difficulty="routine"):
+        return json_reply({
+            "verdict": verdict,
+            "assessed_difficulty": difficulty,
+            "assessment": "One integration by parts; splitting it would add bookkeeping.",
+        })
+
+    def test_a_declined_node_is_not_decomposed(self, project):
+        target_project(project)
+        registry = scripted_registry(project, decomposer=[self._declined()])
+        result = decompose_role.expand(project, "gclm.main", registry=registry)
+
+        assert result.declined
+        assert result.children == []
+        assert result.verdict == "already-atomic"
+        assert graph_of(project)["gclm.main"].children == []
+
+    def test_the_assessment_is_kept_as_a_note(self, project):
+        target_project(project)
+        registry = scripted_registry(project, decomposer=[self._declined()])
+        decompose_role.expand(project, "gclm.main", registry=registry)
+        notes = graph_of(project)["gclm.main"].notes_section
+        assert "Decomposer declined" in notes
+        assert "integration by parts" in notes
+
+    def test_force_overrides_the_decline(self, project):
+        target_project(project)
+        registry = scripted_registry(
+            project, decomposer=[self._declined(), json_reply(decomposition())]
+        )
+        # The first reply declines; with force it is ignored and the schema then
+        # requires a real decomposition, which the second reply supplies.
+        result = decompose_role.expand(project, "gclm.main", registry=registry, force=True)
+        assert not result.declined
+        assert len(result.children) == 3
+
+    def test_a_decline_costs_exactly_one_call(self, project):
+        target_project(project)
+        registry = scripted_registry(project, decomposer=[self._declined()])
+        result = decompose_role.expand(project, "gclm.main", registry=registry)
+        assert len(result.calls) == 1
+
+    def test_summarise_tells_the_user_what_to_do_next(self, project):
+        target_project(project)
+        registry = scripted_registry(project, decomposer=[self._declined("prove-directly")])
+        result = decompose_role.expand(project, "gclm.main", registry=registry)
+        text = decompose_role.summarise(result)
+        assert "not decomposed" in text
+        assert "Generate a proof" in text
 
 
 class TestRedo:

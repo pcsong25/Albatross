@@ -99,6 +99,9 @@ def register(app: typer.Typer) -> None:
         root: Optional[Path] = typer.Option(None, "--root"),
         replay: bool = typer.Option(False, "--replay", help="resolve calls from the log"),
         rounds: int = typer.Option(2, "--repair-rounds"),
+        force: bool = typer.Option(
+            False, "--force", help="decompose even if it judges the node too easy"
+        ),
     ) -> None:
         """Decompose a node one level, repairing against the discharge check."""
         registry = _registry(root, replay)
@@ -109,10 +112,11 @@ def register(app: typer.Typer) -> None:
             hint=hint,
             registry=registry,
             repair_rounds=rounds,
+            force=force,
         )
         console.print(Text(decompose_role.summarise(result)))
         _print_spend(registry)
-        raise typer.Exit(code=0 if result.clean else 1)
+        raise typer.Exit(code=0 if result.clean and not result.declined else 1)
 
     @app.command()
     def redo(
