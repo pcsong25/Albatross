@@ -319,6 +319,28 @@ class TestJobs:
         assert [t["node"] for t in data["tasks"]] == ["a"]
         assert "confirmation calls are not included" in data["text"]
 
+    def test_a_recompile_claims_the_nodes_its_plan_names(self, client, project, monkeypatch):
+        """A recompile writes to many nodes but is named after none. Without the
+        claim, its buttons stay live and a user can queue a second verification
+        of a node it is already verifying."""
+        import threading
+
+        small(project)
+        release = threading.Event()
+        self._patch_registry(monkeypatch, project)
+        monkeypatch.setattr(
+            "bp.recompile.run", lambda *a, **k: release.wait(10)
+        )
+        started = client.post("/api/jobs/recompile", json={}).json()
+        assert started["nodes"] == ["a"]
+        for _ in range(200):
+            if client.app.state.runner.busy_nodes():
+                break
+        assert client.post("/api/node/a/note", json={"text": "x"}).status_code == 409
+        # …and everything else is still live.
+        assert client.post("/api/node/b/note", json={"text": "x"}).status_code == 200
+        release.set()
+
 
 class TestStaticSurface:
     def test_the_page_is_served(self, client, project):

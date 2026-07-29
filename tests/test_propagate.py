@@ -231,36 +231,34 @@ def test_sweep_is_idempotent(project, seed):
     assert first == second
 
 
-def test_shipped_fixture_has_the_statuses_it_advertises(fixture_project):
-    """The shipped development, including the subtree the L1 acceptance run
-    produced under `gclm.elb-b`."""
+def test_the_shipped_development_sweeps_and_holds_its_invariants(fixture_project):
+    """The real project in ``nodes/``.
+
+    This asserts what must be true of it however the mathematics is going, not a
+    snapshot of the statuses. That directory is a *live* project — agents expand
+    it, the acceptance sessions edit it — and a test pinning exact statuses there
+    fails every time the system is actually used, which trains you to ignore it.
+    Exact status behaviour is covered above, on synthetic graphs that hold still.
+    """
     graph, diagnostics, ok = load_graph(fixture_project)
     assert ok
-    statuses = {n.id: n.global_status for n in graph.active.values()}
-    assert statuses["gclm.elb-a"] == PROVED
-    assert statuses["gclm.energy-lower-bound"] == PROVED_MODULO
-    assert statuses["gclm.blowup"] == BLOCKED_CHILDREN
+    assert not [d for d in diagnostics if d.severity == "error"]
+    assert_invariants(graph)  # would already have raised inside the sweep
 
-    # The L1 acceptance run verified this one, so it moved from
-    # blocked:unverified to proved. The verifier panel did that, not a human.
-    assert statuses["gclm.local-existence"] == PROVED
+    target = graph.target
+    assert target is not None and target.id == "gclm.blowup"
 
-    # And flagged this one, with a correct counterexample: `T` is an arbitrary
-    # interval endpoint, not the maximal existence time, so the statement's
-    # blow-up clause is false as written. Staleness still takes priority in the
-    # sweep — the certificate is against an older statement either way.
-    criterion = graph["gclm.blowup-criterion"]
-    assert criterion.local_status == "flagged"
-    assert criterion.flags
-    assert statuses["gclm.blowup-criterion"] == BLOCKED_STALE
-    assert graph["gclm.blowup"].blocked_by == ["gclm.blowup-criterion"]
+    for node in graph.active.values():
+        assert node.global_status in GLOBAL_STATUSES
+        assert node.statement_hash
+        if node.global_status == PROVED:
+            assert node.support == []
 
-    # `gclm.elb-b` is admitted, so it stays proved_modulo on its own id even
-    # though the decomposer has since given it open children. An admission is a
-    # statement about the node, not about what sits under it.
+    # An admission is a statement about the node, not about what sits under it:
+    # `gclm.elb-b` supports itself even though the decomposer has since given it
+    # children of its own.
     elb_b = graph["gclm.elb-b"]
     assert elb_b.local_status == "admitted"
     assert elb_b.global_status == PROVED_MODULO
     assert elb_b.support == ["gclm.elb-b"]
-    assert len(elb_b.children) == 3
-    assert all(statuses[c] == OPEN for c in elb_b.children)
+    assert elb_b.children
