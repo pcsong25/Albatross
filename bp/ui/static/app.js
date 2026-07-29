@@ -26,6 +26,7 @@ const state = {
   jobs: [],
   busy: new Set(),
   editing: null,          // 'statement' | 'proof' | null
+  macros: {},             // parsed from preamble.tex, handed to KaTeX
   cy: null,
 };
 
@@ -74,13 +75,111 @@ function toast(message, bad) {
 
 /* ------------------------------------------------------- mathematics as HTML */
 
-// $$…$$, \[…\], \(…\), $…$ — the delimiters that actually appear in the corpus.
-const MATH_RE = /(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$[^$\n]+?\$)/g;
+// The delimiters mathematicians actually type. Besides $…$, $$…$$, \[…\] and
+// \(…\), an `align` (or `equation`, `gather`, …) environment is very often
+// written bare, with no dollar signs around it — that is standard LaTeX and
+// KaTeX renders it directly. Missing them meant a displayed equation came out
+// as literal source, which is how this list got longer.
+const DISPLAY_ENVS = [
+  'align', 'equation', 'gather', 'multline', 'alignat', 'flalign', 'eqnarray',
+  'displaymath', 'CD',
+].map((e) => e + '\\*?').join('|');
+const MATH_RE = new RegExp(
+  '(' +
+  '\\$\\$[\\s\\S]*?\\$\\$' +                                  // $$ … $$
+  '|\\\\\\[[\\s\\S]*?\\\\\\]' +                            // \[ … \]
+  '|\\\\\\([\\s\\S]*?\\\\\\)' +                            // \( … \)
+  '|\\\\begin\\{(?:' + DISPLAY_ENVS + ')\\}[\\s\\S]*?\\\\end\\{(?:' + DISPLAY_ENVS + ')\\}' +
+  '|\\$[^$\\n]+?\\$' +                                        // $ … $
+  ')',
+  'g',
+);
 const REF_RE = /`([A-Za-z0-9][A-Za-z0-9._-]*)`/g;
+
+/* --- the project's own macros ------------------------------------------------
+ *
+ * KaTeX takes a macro map but does NOT learn from a \newcommand it renders, so
+ * the preamble has to be parsed. This is presentation only — it decides how your
+ * notation is *drawn*, never anything about the graph — which is why it can live
+ * in the browser at all.
+ */
+
+/** Read a balanced {...} group starting at `i` (which must be the brace). */
+function readGroup(src, i) {
+  if (src[i] !== '{') return null;
+  let depth = 0;
+  for (let j = i; j < src.length; j++) {
+    if (src[j] === '\\') { j++; continue; }
+    if (src[j] === '{') depth++;
+    else if (src[j] === '}') {
+      depth--;
+      if (depth === 0) return { body: src.slice(i + 1, j), end: j + 1 };
+    }
+  }
+  return null;
+}
+
+/** \newcommand / \renewcommand / \providecommand / \def / \DeclareMathOperator. */
+function parsePreamble(text) {
+  const macros = {};
+  const src = text.replace(/(^|[^\\])%.*$/gm, '$1');   // drop LaTeX comments
+  const cmd = /\\(newcommand|renewcommand|providecommand|DeclareMathOperator)(\*?)\s*/g;
+  let m;
+  while ((m = cmd.exec(src)) !== null) {
+    let i = m.index + m[0].length;
+    let name;
+    if (src[i] === '{') {
+      const g = readGroup(src, i);
+      if (!g) continue;
+      name = g.body.trim(); i = g.end;
+    } else if (src[i] === '\\') {
+      const mm = /^\\[A-Za-z]+/.exec(src.slice(i));
+      if (!mm) continue;
+      name = mm[0]; i += mm[0].length;
+    } else continue;
+    if (!/^\\[A-Za-z]+$/.test(name)) continue;
+
+    while (src[i] === ' ') i++;
+    let argc = 0;
+    if (src[i] === '[') {                      // [n] argument count
+      const close = src.indexOf(']', i);
+      const n = parseInt(src.slice(i + 1, close), 10);
+      if (!isNaN(n)) argc = n;
+      i = close + 1;
+      if (src[i] === '[') {                    // an optional-arg default; KaTeX
+        const g = readGroup(src, src.indexOf('[', i));   // has no equivalent, so
+        i = src.indexOf(']', i) + 1;                     // it is skipped
+      }
+    }
+    while (src[i] === ' ' || src[i] === '\n') i++;
+    const body = readGroup(src, i);
+    if (!body) continue;
+    macros[name] = m[1] === 'DeclareMathOperator'
+      ? '\\operatorname' + (m[2] || '') + '{' + body.body + '}'
+      : body.body;
+  }
+
+  // \def\foo{...} — no argument spec supported, which covers the common case.
+  const def = /\\def\s*(\\[A-Za-z]+)\s*/g;
+  while ((m = def.exec(src)) !== null) {
+    const body = readGroup(src, m.index + m[0].length);
+    if (body) macros[m[1]] = body.body;
+  }
+  return macros;
+}
+
+async function loadMacros() {
+  try {
+    const text = await api('/api/preamble');
+    state.macros = parsePreamble(text || '');
+  } catch (e) { state.macros = {}; }
+}
 
 function renderMath(tex, display) {
   try {
-    return katex.renderToString(tex, { displayMode: display, throwOnError: false });
+    return katex.renderToString(tex, {
+      displayMode: display, throwOnError: false, macros: state.macros,
+    });
   } catch (e) {
     return null;   // fall back to showing the source, escaped
   }
@@ -118,6 +217,7 @@ function mathProse(text) {
     if (token.startsWith('$$')) { tex = token.slice(2, -2); display = true; }
     else if (token.startsWith('\\[')) { tex = token.slice(2, -2); display = true; }
     else if (token.startsWith('\\(')) { tex = token.slice(2, -2); display = false; }
+    else if (token.startsWith('\\begin{')) { tex = token; display = true; }  // KaTeX takes the whole env
     else { tex = token.slice(1, -1); display = false; }
     const html = renderMath(tex, display);
     if (html) frag.append(el('span', { html: html }));
@@ -423,7 +523,8 @@ async function showDetail(id) {
   // --- statement
   panel.append(sectionHeading('Statement', 'statement', node, busy));
   if (state.editing === 'statement') {
-    panel.append(editor(node.statement, async (text) => saveStatement(node.id, text)));
+    panel.append(editor(node.statement, (text) =>
+      tidyThenSave(node.id, text, 'statement', (final) => saveStatement(node.id, final))));
   } else {
     const body = el('div', { class: 'prose' });
     body.append(mathProse(node.statement));
@@ -433,12 +534,13 @@ async function showDetail(id) {
   // --- proof
   panel.append(sectionHeading('Proof', 'proof', node, busy));
   if (state.editing === 'proof') {
-    panel.append(editor(node.proof, async (text) => {
-      await post(`/api/node/${encodeURIComponent(node.id)}/proof`, { text });
-      state.editing = null;
-      toast('proof saved');
-      await refresh();
-    }));
+    panel.append(editor(node.proof, (text) =>
+      tidyThenSave(node.id, text, 'proof', async (final) => {
+        await post(`/api/node/${encodeURIComponent(node.id)}/proof`, { text: final });
+        state.editing = null;
+        toast('proof saved');
+        await refresh();
+      })));
   } else if (node.proof.trim()) {
     const body = el('div', { class: 'prose' });
     body.append(mathProse(node.proof));
@@ -530,6 +632,74 @@ function editor(initial, onSave) {
     'LaTeX. You write the source and read it typeset — there is no rich-text editor.'));
   box.append(area, row);
   return box;
+}
+
+/** Ask the proof-reader, then show the rewrite beside the original.
+ *
+ * Nothing is written until the author picks one. The agent may fix syntax; it
+ * may not touch the mathematics, and the only way to be sure of that is to let
+ * the person who wrote it look. */
+async function tidyThenSave(id, text, kind, commit) {
+  const body = el('div', {});
+  body.append(el('div', { class: 'spinner-row' }, 'Checking the LaTeX…'));
+  sheet('Checking ' + kind, body, [{ label: 'Skip and save', onClick: () => { closeSheet(); commit(text); } }]);
+
+  let tidy;
+  try { tidy = await post('/api/tidy', { text, kind }); }
+  catch (e) {
+    // A proof-reader that cannot run must never block a save.
+    closeSheet(); toast('LaTeX check unavailable — saving as typed'); commit(text); return;
+  }
+
+  if (!tidy.changed && !(tidy.concerns || []).length) {
+    closeSheet(); commit(text); return;
+  }
+
+  body.textContent = '';
+  if (tidy.changed) {
+    body.append(el('p', { class: 'small muted' },
+      'The LaTeX below did not look like it would typeset. Proposed corrections ' +
+      'are syntax only — if any of these changes the mathematics, reject it and ' +
+      'tell me, because that is a bug.'));
+    const list = el('ul', { class: 'small' });
+    for (const change of tidy.changes) list.append(el('li', {}, change));
+    body.append(list);
+
+    const cols = el('div', { class: 'diffcols' });
+    const left = el('div', {});
+    left.append(el('h3', { class: 'section' }, 'As you typed it'));
+    left.append(el('pre', { class: 'tex' }, text));
+    const right = el('div', {});
+    right.append(el('h3', { class: 'section' }, 'Proposed'));
+    right.append(el('pre', { class: 'tex' }, tidy.text));
+    cols.append(left, right);
+    body.append(cols);
+
+    body.append(el('h3', { class: 'section' }, 'Proposed, typeset'));
+    const preview = el('div', { class: 'prose' });
+    preview.append(mathProse(tidy.text));
+    body.append(preview);
+  }
+  if ((tidy.concerns || []).length) {
+    const warn = el('div', { class: 'warnbox' });
+    warn.append(el('b', {}, 'It also has concerns about the mathematics. '),
+                'These were NOT changed:');
+    const list = el('ul', {});
+    for (const c of tidy.concerns) list.append(el('li', {}, c));
+    warn.append(list);
+    body.append(warn);
+  }
+
+  const actions = [
+    { label: 'Keep mine', onClick: () => { closeSheet(); commit(text); } },
+  ];
+  if (tidy.changed) {
+    actions.push({
+      label: 'Use the correction', primary: true,
+      onClick: () => { closeSheet(); commit(tidy.text); },
+    });
+  }
+  sheet('LaTeX check — ' + kind, body, actions);
 }
 
 /** Editing a statement moves its hash, so say what that invalidates first. */
@@ -912,6 +1082,43 @@ function drawJobStrip() {
 function showJobResult(job) {
   const result = job.result || {};
   const body = el('div', {});
+  if ((job.kind === 'expand' || job.kind === 'redo') && result.declined) {
+    body.append(el('div', { class: 'warnbox' },
+      el('b', {}, 'Not decomposed. '),
+      `The decomposer judged this ${result.assessed_difficulty} and `,
+      result.verdict === 'already-atomic'
+        ? 'a single step — splitting it would add bookkeeping, not structure.'
+        : 'clear enough to write out directly.'));
+    const why = el('div', { class: 'prose' });
+    why.append(mathProse(result.assessment || ''));
+    body.append(why);
+    body.append(el('p', { class: 'small muted' },
+      'Nothing was written; the assessment has been added as a note. It is your ' +
+      'call — the decomposer is guessing at difficulty just as you are.'));
+    sheet('Assessment — ' + job.node, body, [
+      { label: 'Close', onClick: closeSheet },
+      {
+        label: 'Decompose anyway',
+        onClick: () => { closeSheet(); runJob('expand', job.node, { force: true }); },
+      },
+      {
+        label: 'Write the proof', primary: true,
+        onClick: async () => {
+          closeSheet();
+          // Take its difficulty judgement, so the prover's routine/standard
+          // guard is satisfied by the assessment rather than bypassed.
+          if (['routine', 'standard'].includes(result.assessed_difficulty)) {
+            try {
+              await post(`/api/node/${encodeURIComponent(job.node)}/relabel`,
+                         { difficulty: result.assessed_difficulty });
+            } catch (e) { /* keep going; prove will say if it objects */ }
+          }
+          runJob('prove', job.node);
+        },
+      },
+    ]);
+    return;
+  }
   if (job.kind === 'expand' || job.kind === 'redo') {
     if (result.archived_to) {
       body.append(el('div', { class: 'small muted' }, 'Previous attempt archived to ' + result.archived_to));
@@ -1157,6 +1364,38 @@ async function historySheet() {
   sheet('History', body, [{ label: 'Close', onClick: closeSheet }]);
 }
 
+async function preambleSheet() {
+  const body = el('div', {});
+  body.append(el('p', { class: 'small muted' },
+    'Your own LaTeX preamble — \\newcommand, \\DeclareMathOperator, packages. ' +
+    'It is injected verbatim into the rendered document, shown to every agent as ' +
+    'context so they can read your notation, and parsed here so KaTeX draws it. ' +
+    'Stored as preamble.tex in the project.'));
+  const area = el('textarea', {});
+  area.style.minHeight = '320px';
+  try { area.value = await api('/api/preamble'); } catch (e) { area.value = ''; }
+  body.append(area);
+  const count = el('p', { class: 'small muted' },
+    Object.keys(state.macros).length + ' macro(s) currently in use: ' +
+    (Object.keys(state.macros).join(' ') || 'none'));
+  body.append(count);
+
+  sheet('Preamble', body, [
+    { label: 'Cancel', onClick: closeSheet },
+    {
+      label: 'Save', primary: true, onClick: async () => {
+        try {
+          await post('/api/preamble', { text: area.value });
+          await loadMacros();
+          closeSheet();
+          toast(Object.keys(state.macros).length + ' macro(s) loaded');
+          await refresh();
+        } catch (e) { toast(e.message, true); }
+      },
+    },
+  ]);
+}
+
 async function agentsSheet() {
   const data = await api('/api/agents');
   const body = el('div', {});
@@ -1201,6 +1440,7 @@ async function boot() {
   document.getElementById('btn-check').onclick = guard(checkSheet);
   document.getElementById('btn-history').onclick = guard(historySheet);
   document.getElementById('btn-agents').onclick = guard(agentsSheet);
+  document.getElementById('btn-preamble').onclick = guard(preambleSheet);
 
   const legend = document.getElementById('legend');
   document.getElementById('legend-toggle').onclick = () => {
@@ -1209,6 +1449,7 @@ async function boot() {
       legend.classList.contains('folded') ? '+' : '–';
   };
 
+  await loadMacros();
   try {
     await refresh();
     // Open on the target. An empty panel on load wastes half the screen, and the

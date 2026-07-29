@@ -272,6 +272,9 @@ class TestJobs:
     def test_expand_writes_the_children(self, client, project, monkeypatch):
         small(project)
         payload = {
+            "verdict": "decompose",
+            "assessed_difficulty": "hard",
+            "assessment": "Three separate steps.",
             "strategy": "split it",
             "children": [
                 {"slug": f"part-{i}", "role": "lemma", "statement": f"Part {i}.",
@@ -441,3 +444,104 @@ class TestFrontier:
         item = frontier.rank(graph_of(project))[0]
         assert item.needs == "verify the proof"
         assert item.unattempted is False
+
+
+class TestPreamble:
+    """A project's own macros have to reach three places or the notation is
+    only correct in the author's head: the document, the agents, the browser."""
+
+    def test_round_trips_through_the_api(self, client, project):
+        small(project)
+        assert client.get("/api/preamble").text == ""
+        text = "\\newcommand{\\RR}{\\mathbb{R}}\n"
+        assert client.post("/api/preamble", json={"text": text}).status_code == 200
+        assert client.get("/api/preamble").text.strip() == text.strip()
+        assert (project.root / "preamble.tex").exists()
+
+    def test_it_reaches_the_rendered_document(self, client, project):
+        small(project)
+        client.post("/api/preamble", json={"text": "\\newcommand{\\RR}{\\mathbb{R}}"})
+        tex = client.get("/api/render").text
+        assert "\\newcommand{\\RR}{\\mathbb{R}}" in tex
+        assert tex.index("\\newcommand{\\RR}") < tex.index("\\begin{document}")
+
+    def test_it_reaches_the_agents(self, client, project):
+        from bp.roles import context as context_mod
+
+        small(project)
+        client.post("/api/preamble", json={"text": "\\newcommand{\\RR}{\\mathbb{R}}"})
+        block = context_mod.preamble_block(project)
+        assert "\\newcommand{\\RR}" in block
+        assert "Use the same" in block
+
+    def test_no_preamble_means_no_block(self, project):
+        from bp.roles import context as context_mod
+
+        small(project)
+        assert context_mod.preamble_block(project) == ""
+
+    def test_the_document_loads_the_standard_packages(self, client, project):
+        small(project)
+        tex = client.get("/api/render").text
+        for package in ("amsmath", "amssymb", "amsthm", "mathtools", "mathrsfs"):
+            assert f"\\usepackage{{{package}}}" in tex or f"{{{package}}}" in tex
+        # Optional ones are guarded, so a machine without them still builds.
+        assert "\\IfFileExists{bbm.sty}" in tex
+
+
+class TestTidy:
+    def _patch(self, monkeypatch, project, **responses):
+        import bp.ui.app as app_mod
+
+        def fake(project_arg, replay=False, observer=None):
+            return scripted_registry(project, **responses)
+
+        monkeypatch.setattr(app_mod, "Registry", fake)
+
+    def test_a_correction_is_proposed_not_applied(self, client, project, monkeypatch):
+        small(project)
+        self._patch(monkeypatch, project, checker=[json_reply({
+            "changed": True,
+            "text": "\\begin{align} a &= b \\end{align}",
+            "changes": ["closed the align environment"],
+            "concerns": [],
+        })])
+        response = client.post(
+            "/api/tidy",
+            json={"text": "\\begin{align} a &= b \\end{aligned}", "kind": "statement"},
+        )
+        assert response.status_code == 200
+        assert response.json()["changed"] is True
+        assert "end{align}" in response.json()["text"]
+        # Nothing was written: the author has not seen it yet.
+        assert graph_of(project)["t"].statement.startswith("The theorem") if hasattr(
+            graph_of(project)["t"], "statement"
+        ) else True
+
+    def test_clean_latex_comes_back_unchanged(self, client, project, monkeypatch):
+        small(project)
+        self._patch(monkeypatch, project, checker=[json_reply({
+            "changed": False, "text": "$a = b$", "changes": [], "concerns": [],
+        })])
+        data = client.post("/api/tidy", json={"text": "$a = b$"}).json()
+        assert data["changed"] is False
+        assert data["changes"] == []
+
+    def test_mathematical_concerns_are_reported_not_fixed(self, client, project, monkeypatch):
+        small(project)
+        self._patch(monkeypatch, project, checker=[json_reply({
+            "changed": False,
+            "text": "$p \\in [1, \\infty]$",
+            "changes": [],
+            "concerns": ["the case p = infinity may need separate treatment"],
+        })])
+        data = client.post("/api/tidy", json={"text": "$p \\in [1, \\infty]$"}).json()
+        assert data["concerns"]
+        assert data["text"] == "$p \\in [1, \\infty]$"
+
+    def test_a_failed_proofreader_is_a_502_so_the_page_can_save_anyway(
+        self, client, project, monkeypatch
+    ):
+        small(project)
+        self._patch(monkeypatch, project)  # no scripted response
+        assert client.post("/api/tidy", json={"text": "$a$"}).status_code == 502

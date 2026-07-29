@@ -36,6 +36,7 @@ from ..paths import Project
 from ..roles import check as check_role
 from ..roles import decompose as decompose_role
 from ..roles import prove as prove_role
+from ..roles import tidy as tidy_role
 from ..roles import verify as verify_role
 from . import jobs as jobs_mod
 
@@ -55,6 +56,8 @@ class ReasonBody(BaseModel):
 
 class HintBody(BaseModel):
     hint: str | None = None
+    #: Decompose even if the decomposer judges the node not worth splitting.
+    force: bool = False
 
 
 class DifficultyBody(BaseModel):
@@ -71,6 +74,11 @@ class ChildBody(BaseModel):
 
 class AttachBody(BaseModel):
     children: list[str]
+
+
+class TidyBody(BaseModel):
+    text: str
+    kind: str = "statement"
 
 
 class UsesBody(BaseModel):
@@ -303,13 +311,28 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
 
     # --- render --------------------------------------------------------------
 
+    @app.get("/api/preamble", response_class=PlainTextResponse)
+    def api_get_preamble() -> str:
+        """The project's own LaTeX preamble. The browser parses the macro
+        definitions out of it so KaTeX renders statements in your notation."""
+        return ops.read_preamble(project)
+
+    @app.post("/api/preamble")
+    def api_set_preamble(body: TextBody) -> dict[str, Any]:
+        mutate(ops.set_preamble, project, body.text)
+        return {"ok": True}
+
     @app.get("/api/render", response_class=PlainTextResponse)
     def api_render(clean: bool = False, audit: bool = False) -> str:
-        return render_mod.document(load(), clean=clean, audit=audit)
+        return render_mod.document(
+            load(), clean=clean, audit=audit, preamble=ops.read_preamble(project)
+        )
 
     @app.get("/api/render.tex")
     def api_render_download(clean: bool = False, audit: bool = False) -> FileResponse:
-        tex = render_mod.document(load(), clean=clean, audit=audit)
+        tex = render_mod.document(
+            load(), clean=clean, audit=audit, preamble=ops.read_preamble(project)
+        )
         path = project.build_dir / ("document-clean.tex" if clean else "document.tex")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(tex, encoding="utf-8")
@@ -324,7 +347,9 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
                 detail="no pdflatex on PATH. The LaTeX source is still available "
                 "from the download button.",
             )
-        tex = render_mod.document(load(), clean=clean, audit=audit)
+        tex = render_mod.document(
+            load(), clean=clean, audit=audit, preamble=ops.read_preamble(project)
+        )
         build = project.build_dir
         build.mkdir(parents=True, exist_ok=True)
         name = "document-clean" if clean else "document"
@@ -425,6 +450,29 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
         mutate(ops.set_uses, project, node_id, body.uses)
         return {"ok": True}
 
+    @app.post("/api/tidy")
+    def api_tidy(body: TidyBody) -> dict[str, Any]:
+        """Propose a syntax-only correction to a passage of LaTeX.
+
+        Writes nothing. The browser shows the rewrite beside the original and the
+        author accepts or rejects it — an agent must not edit a mathematician's
+        theorem behind their back.
+        """
+        try:
+            registry = Registry(project, replay=app.state.replay)
+        except ConfigError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            report = tidy_role.tidy(project, body.text, kind=body.kind, registry=registry)
+        except Exception as exc:  # a failed tidy must never block a save
+            raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}")
+        return {
+            "changed": report.changed,
+            "text": report.result.text if report.result else body.text,
+            "changes": report.result.changes if report.result else [],
+            "concerns": report.result.concerns if report.result else [],
+        }
+
     @app.post("/api/sweep")
     def api_sweep() -> dict[str, Any]:
         graph, rewritten = mutate(ops.sweep_only, project)
@@ -436,12 +484,19 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
     def api_expand(node_id: str, body: HintBody) -> dict[str, Any]:
         def work(job: jobs_mod.Job) -> dict[str, Any]:
             result = decompose_role.expand(
-                project, node_id, hint=body.hint, registry=registry_for(job)
+                project, node_id, hint=body.hint, registry=registry_for(job),
+                force=body.force,
             )
             return {
                 "children": result.children,
                 "rounds": result.rounds,
                 "clean": result.clean,
+                "declined": result.declined,
+                "verdict": result.verdict,
+                "assessment": result.assessment,
+                "assessed_difficulty": (
+                    result.decomposition.assessed_difficulty if result.decomposition else ""
+                ),
                 "diagnostics": [d.model_dump() for d in result.diagnostics],
                 "notes": result.decomposition.notes if result.decomposition else "",
                 "strategy": result.decomposition.strategy if result.decomposition else "",

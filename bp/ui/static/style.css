@@ -257,3 +257,8 @@ pre.tex {
 }
 .toast.hidden { display: none; }
 .toast.bad { background: var(--unsound); }
+
+/* Side-by-side original and proposed, for the LaTeX proof-reader. */
+.diffcols { display: flex; gap: 12px; }
+.diffcols > div { flex: 1 1 0; min-width: 0; }
+.diffcols pre.tex { max-height: 34vh; white-space: pre-wrap; word-break: break-word; }
