@@ -23,7 +23,10 @@ hypotheses:
     tex: 0<\theta\le 1
   - id: H7
     tex: f(y)\le-\theta z y\quad\text{for }0\le y\le\delta
-uses: {}
+uses:
+  gclm.hilbert-kernel-split:
+    applied_to: ''
+    discharges: {}
 # --- computed fields: written by `bp sweep`. Never edit them, and never let an agent write them. ---
 global_status: open
 support: []
