@@ -1,0 +1,23 @@
+{
+  "id": "20260729-212719-c2e2f9",
+  "kind": "recompile",
+  "params": {
+    "only": null,
+    "calls": 9
+  },
+  "tasks": [
+    "verify:gclm.blowup",
+    "verify:gclm.blowup-criterion"
+  ],
+  "completed": [
+    "verify:gclm.blowup",
+    "verify:gclm.blowup-criterion"
+  ],
+  "status": "done",
+  "started_at": "2026-07-29T21:27:19+00:00",
+  "finished_at": "2026-07-29T21:46:15+00:00",
+  "notes": [
+    "gclm.blowup: flagged",
+    "gclm.blowup-criterion: flagged"
+  ]
+}

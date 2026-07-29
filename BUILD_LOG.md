@@ -368,18 +368,39 @@ stayed live.
 pytest -q       261 passed
 ```
 
-### The statement edit was a real fix, not a demonstration
+### The statement edit was a real fix — and the recompile showed it was only half of one
 
 The L1 verifier found that `gclm.blowup-criterion` claimed $z \to \infty$ as
 $t \to T^-$ when $T$ is an arbitrary interval endpoint rather than the maximal
 existence time. The acceptance session used the edit-statement flow to correct
-it — the bound $T \le 1/(\kappa z(0))$ always holds, the blow-up clause now says
-"if moreover $[0,T)$ is maximal" — watched the warning name both affected
-verifications, committed, and recompiled to have the fix re-checked.
+it: the bound $T \le 1/(\kappa z(0))$ always holds, and the blow-up clause now
+says "if moreover $[0,T)$ is maximal". The warning named both affected
+verifications before committing; the recompile then re-checked it.
 
-Found by an agent, fixed by a human, re-verified by an agent, with the graph
-tracking what that invalidated at every step. That is the loop this whole system
-exists to close, and it ran end to end in a browser.
+**It came back flagged, correctly.** I changed the statement and not the proof,
+and the proof still ends by letting $t \to T^-$ in $1/z(t) \le 1/z(0) - \kappa t$
+— which never invokes maximality and does not give the conclusion. The verifier
+said exactly that, and produced a second counterexample showing the repair is not
+even a matter of bookkeeping: with $\kappa = 1$, $T = 1/100$, $z(0) = 1$ and
+$z' = 3 + \sin(1/(T-t))$, the hypotheses hold and $z$ admits no $C^1$ extension,
+yet $z$ stays bounded. Non-extendability can come from an oscillating derivative
+rather than from blow-up, so "maximal as a $C^1$ function" is the wrong
+maximality.
+
+It also found a separate, unrelated gap on `gclm.blowup`: `gclm.local-existence`
+gives continuation from $\int_0^T \|\partial_x\omega\|_{L^\infty}\,dt < \infty$,
+and the proof restates it as boundedness of $\|\omega\|_{H^s}$, then uses that
+misstatement to pass from $\|\partial_x\omega(t)\|_{L^\infty} \to \infty$ to the
+theorem's $\|\omega(t)\|_{L^\infty} \to \infty$. That step is not justified by
+anything cited.
+
+Both are left flagged. `bp check` and `bp why` explain them, the render marks
+them, and how to restate the lemma is the user's mathematics, not mine.
+
+The loop is what matters here: found by an agent, edited by a human through the
+interface with the blast radius shown before committing, re-checked by an agent,
+and found still wanting — with the graph tracking exactly what each step
+invalidated. It ran end to end in a browser, and it caught me being sloppy.
 
 ### What surprised me
 

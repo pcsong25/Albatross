@@ -1,7 +1,8 @@
 ---
 id: gclm.one-scale-hilbert-coercivity
 role: lemma
-children: []
+children:
+  - gclm.hilbert-kernel-split
 strategy: null
 difficulty: standard
 lifecycle: active

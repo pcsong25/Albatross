@@ -7,27 +7,26 @@ difficulty: routine
 lifecycle: active
 local_status: flagged
 flags:
-  - kind: counterexample
-    section: statement
-    quote: and $z(t) \to \infty$ as $t \to T^-$.
-    why: 'The final step is a genuine non-sequitur: the inequality $1/z(t) \le 1/z(0) - \kappa t$ only forces $1/z(t) \to 0$ when $T = 1/(\kappa z(0))$, and since $T \in (0,\infty]$ is an arbitrary interval endpoint rather than the maximal existence time, the blowup conclusion fails outright for $\kappa = 1$, $T = 1/2$, $z(t) = 1/(1-t)$, where $z(t) \to 2$.'
-    raised_by: verifier_a:opus
   - kind: non-sequitur
     section: proof
     quote: Letting $t \to T^-$ in the displayed inequality gives $1/z(t) \to 0$, so $z(t) \to \infty$.
-    why: 'The final step needs $T$ to be maximal, which is nowhere assumed: with $\kappa = 1$, $z(t) = 1/(1-t)$ on $[0, T)$ with $T = 1/2$ all hypotheses hold and $T \le 1/(\kappa z(0)) = 1$, yet $z(t) \to 2$, so the asserted $z(t) \to \infty$ as $t \to T^-$ is false as stated and the inequality $1/z(t) \le 1/z(0) - \kappa t$ only forces $1/z(t) \to 0$ when $T = 1/(\kappa z(0))$.'
+    why: The displayed inequality yields only $\limsup_{t \to T^-} 1/z(t) \le 1/z(0) - \kappa T$, which vanishes only if $T$ attains the bound the proof merely established as an inequality, and no continuation argument is supplied to rule out a bounded $z$ on a maximal finite interval — indeed for a general $C^1$ function no such argument exists, since $z(t) = 1 + t + \eta (1/2 - t)^2 \sin\!\big(1/(1/2 - t)\big)$ with $\eta$ and $\kappa$ small satisfies $z' \ge \kappa z^2$ on $[0, 1/2)$, is maximal there because $z'$ has no limit at $1/2^-$, and stays bounded.
     raised_by: verifier_a:opus
   - kind: counterexample
     section: statement
-    quote: and $z(t) \to \infty$ as $t \to T^-.$
-    why: 'The conclusion $z(t) \to \infty$ as $t \to T^-$ does not follow, because $T$ is not assumed maximal: the integrated inequality only gives $1/z(t) \le 1/z(0) - \kappa t$, whose right-hand side tends to $1/z(0) - \kappa T > 0$ unless $T = 1/(\kappa z(0))$, and the admissible datum $\kappa = 1$, $T = 1/2$, $z(t) = 1/(1-t)$ satisfies every hypothesis while $z$ stays bounded by $2$.'
-    raised_by: verifier_b:default
+    quote: If moreover $[0,T)$ is the maximal interval on which $z$ is defined and $C^1$, then $z(t) \to \infty$ as $t \to T^-$.
+    why: "The second conclusion does not follow: the proof's last step, letting $t \\to T^-$ in $1/z(t) \\le 1/z(0) - \\kappa t$, forces $1/z(t) \\to 0$ only when $T = 1/(\\kappa z(0))$, and maximality in the stated sense ($z$ admits no $C^1$ extension) does not force that, since non-extendability can come from an oscillating $z'$ instead — e.g. $\\kappa = 1$, $T = 1/100$, $z(0) = 1$, $z' = 3 + \\sin(1/(T-t))$ satisfies H1-H2, has no $C^1$ extension past $T$, yet stays below $1.04$."
+    raised_by: verifier_a:opus
   - kind: unjustified-limit
     section: proof
     quote: Letting $t \to T^-$ in the displayed inequality gives $1/z(t) \to 0$, so $z(t) \to \infty$.
-    why: 'The blow-up conclusion needs $T$ to be the maximal existence time, equivalently $T = 1/(\kappa z(0))$, and nothing in the hypotheses forces that: $\kappa = 1$, $z(t) = 1/(1-t)$ on $[0, T)$ with $T = 1/2$ satisfies H1 and H2 yet $z(t) \to 2$, so the final step of the proof — and the corresponding clause of the statement — is false as written.'
+    why: "The final limit is a non-sequitur: the displayed inequality's right-hand side tends to $1/z(0) - \\kappa T$, which is strictly positive whenever $T < 1/(\\kappa z(0))$, so it cannot force $1/z(t) \\to 0$ — the conclusion can only come from the maximality hypothesis, which the proof never invokes (and would need an extension argument to use)."
     raised_by: verifier_b:default
-
+  - kind: counterexample
+    section: statement
+    quote: If moreover $[0,T)$ is the maximal interval on which $z$ is defined and $C^1$, then $z(t) \to \infty$ as $t \to T^-.$
+    why: "The blow-up clause is false as stated: maximality of the $C^1$ interval only prevents $C^1$ continuation, which can fail because $z'$ diverges while $z$ stays bounded (e.g. $\\kappa = 1/8$, $T = 1$, $z(t) = 2 - \\sqrt{1-t}$, where $z' \\ge 1/2 \\ge \\kappa z^2$ and $z \\to 2$), and the proof's last step is the same gap — $1/z(t) \\le 1/z(0) - \\kappa t$ forces $1/z(t) \\to 0$ only when $T = 1/(\\kappa z(0))$, so the conclusion needs maximality with respect to continuation of the underlying ODE rather than mere $C^1$ extendability."
+    raised_by: verifier_b:default
 hypotheses:
   - {id: H1, tex: "z \\in C^1([0,T)) \\text{ and } z(0) > 0"}
   - {id: H2, tex: "z'(t) \\ge \\kappa\\, z(t)^2 \\text{ on } [0,T), \\ \\kappa > 0"}
@@ -37,7 +36,7 @@ uses: {}
 global_status: blocked:stale
 support: []
 blocked_by: []
-statement_hash: '896e63762324'
+statement_hash: '50d363cce6d9'
 verified_against: {self: '0000deadbeef'}
 stale: true
 ---
@@ -51,9 +50,10 @@ $z(0) > 0$ and
 \]
 Then
 \[
-  T \ \le \ \frac{1}{\kappa\, z(0)},
+  T \ \le \ \frac{1}{\kappa\, z(0)} .
 \]
-and $z(t) \to \infty$ as $t \to T^-$.
+If moreover $[0,T)$ is the maximal interval on which $z$ is defined and $C^1$,
+then $z(t) \to \infty$ as $t \to T^-$.
 
 ## Proof
 

@@ -5,15 +5,17 @@ children: []
 strategy: null
 difficulty: standard
 lifecycle: active
-local_status: unverified
+local_status: admitted
+status_reason: 'kept as a recorded counterexample, not a step: the checker showed it negates a sibling, so it must never be cited as support'
 flags: []
 hypotheses:
   - id: H1
     tex: 0<\theta<1
 uses: {}
 # --- computed fields: written by `bp sweep`. Never edit them, and never let an agent write them. ---
-global_status: open
-support: []
+global_status: proved_modulo
+support:
+  - gclm.high-frequency-obstruction
 blocked_by: []
 statement_hash: '7011192f03de'
 stale: false

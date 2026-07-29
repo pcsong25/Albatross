@@ -1,1 +1,42 @@
-{}
+{
+  "0983b780755b7fdd": {
+    "id": "ob:gclm.blowup:gclm.blowup-criterion:H1",
+    "verdict": {
+      "confidence": "medium",
+      "entails": true,
+      "why": "Both halves of H1 are supplied for the stated object: $z(0) = -\\partial_x \\omega(0,0) = -\\omega_0'(0)$ is exactly the definition evaluated at $t = 0$, with positivity named to hypothesis H2 of the citing node, and $C^1$ regularity of $t \\mapsto -\\partial_x \\omega(t,0)$ is a genuine consequence of the local solution being classical (the equation gives $\\partial_t \\partial_x \\omega$ continuously), not a placeholder. The only slack is the interval, $[0,T_{\\max})$ supplied against $[0,T)$ needed, which is harmless provided the criterion is applied with $T \\le T_{\\max}$ as intended."
+    }
+  },
+  "1f2c8cb4bd563b77": {
+    "id": "ob:gclm.blowup:gclm.energy-lower-bound:H2",
+    "verdict": {
+      "confidence": "high",
+      "entails": true,
+      "why": "The source is hypothesis H2 of the citing node itself, which states $\\omega_0$ is odd with $\\omega_0'(0) < 0$ — exactly the needed hypothesis, and it is a condition on the initial datum $\\omega_0$, so no transfer to a later time $t \\in [0, T_{\\max})$ is required. The extra regularity clause $\\omega_0 \\in H^s(\\mathbb{S}^1)$, $s > 3/2$, is strictly more information than H2 asks for."
+    }
+  },
+  "23259c7c29722e0a": {
+    "id": "ob:gclm.blowup:gclm.local-existence:H1",
+    "verdict": {
+      "confidence": "low",
+      "entails": false,
+      "why": "H2 is strictly stronger than H1 in the relevant respects and does contain \"$\\\\omega_0 \\\\in H^s(\\\\mathbb{S}^1)$, $s > 3/2$\" verbatim as a conjunct, so the needed regularity and range of $s$ are supplied for the same object $\\\\omega_0$; the extra conditions (odd, $\\\\omega_0'(0) < 0$) are harmless surplus. However, H2 is a hypothesis of `gclm.blowup` itself, which the citation resolves to only if the $s$ in H2 is the same $s$ the lemma is instantiated at, and that is not shown here."
+    }
+  },
+  "5864742a15bf88db": {
+    "id": "ob:gclm.blowup:gclm.energy-lower-bound:H3",
+    "verdict": {
+      "confidence": "medium",
+      "entails": false,
+      "why": "H2 gives $\\omega_0 \\in H^s(\\mathbb{S}^1)$ with $s > 3/2$, which is exactly H3 (H2 is strictly stronger, adding oddness and $\\omega_0'(0) < 0$), but H3 is a hypothesis on the initial datum $\\omega_0$ while the lemma is being applied to $\\omega(t,\\cdot)$ for $t \\in [0, T_{\\max})$; nothing in H2 supplies $\\omega(t,\\cdot) \\in H^s$ at positive times, which needs a persistence-of-regularity statement (local well-posedness in $H^s$ on $[0,T_{\\max})$)."
+    }
+  },
+  "58d0568f3b601a23": {
+    "id": "ob:gclm.blowup:gclm.energy-lower-bound:H1",
+    "verdict": {
+      "confidence": "high",
+      "entails": true,
+      "why": "The needed hypothesis $0 < a < 1/2$ is literally hypothesis H1 of the citing node's own statement, and it is a constraint on the fixed parameter $a$ rather than on the object $\\omega(t,\\cdot)$, so it holds uniformly for all $t \\in [0, T_{\\max})$ with no transfer required."
+    }
+  }
+}
