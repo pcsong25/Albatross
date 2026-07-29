@@ -460,8 +460,36 @@ silently dropped.
 
 Statements, proofs and reasons are inserted as LaTeX, unescaped, because that is
 what they are. Only ids and generated labels are escaped. Hypothesis `tex`
-fragments are wrapped in `$…$`. The preamble uses only `amsmath`, `amssymb`,
-`amsthm`, `xcolor` and `hyperref`, so it compiles anywhere.
+fragments are wrapped in `$…$`.
+
+The document loads `amsmath`, `amssymb`, `amsthm`, `mathtools`, `mathrsfs`,
+`xcolor` and `hyperref` unconditionally, and `bbm`, `enumitem` and `float`
+behind `\IfFileExists`, so a machine without them still builds. Then, if the
+project has a `preamble.tex`, it is injected verbatim before `\title` — see §9a.
+
+---
+
+## 9a. The project preamble
+
+`preamble.tex` at the project root, optional, edited from `bp preamble` or the
+**Preamble** button. Everything in this system is written in the author's own
+notation, so three separate things need to know what that notation means:
+
+1. **The rendered document** includes it verbatim, before `\title`.
+2. **Every agent** gets it in context (`roles/context.preamble_block`). This is
+   the one that matters. A model shown `\ip{u}{v} \in \Hs` and no definitions
+   does not say it cannot read the statement; it invents a meaning and answers
+   confidently about it.
+3. **The browser** parses it into a KaTeX macro map (`parsePreamble` in
+   `app.js`), because KaTeX takes a macro map but does not learn from a
+   `\newcommand` it has rendered. `\newcommand`, `\renewcommand`,
+   `\providecommand`, `\DeclareMathOperator` (starred or not) and `\def` are
+   handled, with arguments and nested braces. KaTeX has no optional-argument
+   default, so `\newcommand{\f}[2][x]{…}` loses the default; `GUIDE.md` §6a says
+   so.
+
+The parse in (3) decides only how notation is *drawn*. Nothing about the graph
+depends on it, which is the line `bp/ui` is not allowed to cross.
 
 ---
 
@@ -638,7 +666,7 @@ question do not collide.
 
 ---
 
-## 13. The four roles
+## 13. The roles
 
 Each role assembles context deterministically (`bp/roles/context.py` — no model
 decides what a model gets to see), asks for JSON, runs the deterministic checks
@@ -647,7 +675,27 @@ on what came back, and writes through `ops`. The prompts live in
 
 ### Decomposer
 
-One level. 3–7 children, each a section or a major lemma. The prompt says
+**It decides whether to decompose at all, first.** The response carries a
+`verdict` — `decompose`, `prove-directly` or `already-atomic` — with an
+`assessed_difficulty` and two sentences of `assessment`. A pydantic validator
+ties the shape to the verdict: `decompose` requires 3–7 children and a reduction
+proof, the other two require neither, so a decline cannot arrive carrying
+half a decomposition.
+
+On a decline **nothing is written**. The assessment is kept as a note and the
+user is offered *Write the proof* (the prover, on this node) or *Decompose
+anyway*. Reporting rather than auto-proving is deliberate: auto-proving would let
+one call decide both that a node needs no structure and what its proof is, and
+would bypass the prover's own difficulty guard. `DECISIONS.md` D041.
+
+*Decompose anyway* (`force=True`, `?force=1`) changes the **prompt** — the model
+is told the user has overruled its judgement and asked for the best available
+split — rather than skipping the check. Skipping it was the first
+implementation, and a model that declined a second time returned an empty
+decomposition which was then applied. A forced call that still declines is now a
+`DEC001` warning fed into the ordinary repair round.
+
+When it does decompose: one level. 3–7 children, each a section or a major lemma. The prompt says
 explicitly that the leaves are *expected* to be hard and unproved and that it
 must not attempt provable granularity — without that it goes four levels deep in
 one call and the user spends the afternoon pruning.
@@ -738,6 +786,30 @@ role produces, because it is usually a fact about the *decomposition* rather tha
 about the lemma. Steps it could not justify go into `gaps`, which become `% GAP:`
 comments in the proof and a note on the node.
 
+### Proof-reader
+
+`bp/roles/tidy.py`, run when a statement is saved from the browser. It is the
+narrowest thing in the system, and the two constraints are what make an agent
+touching authored text acceptable at all:
+
+*It may fix syntax; it may not touch the mathematics.* Not an index, not a
+quantifier, not the direction of an inequality. Braces, `$`, `\left`/`\right`, an
+environment closed with the wrong name, an obsolete `\bf`, an unambiguous
+misspelled control sequence. Anything it believes is mathematically wrong goes
+into `concerns`, **unchanged** — it is the author's theorem and it may be right
+in a way the model has not seen. Commands defined in `preamble.tex` are correct
+by definition.
+
+*The author sees the rewrite before it is written.* `POST /api/tidy` writes
+nothing; the browser shows the proposal beside the original with one line of
+justification per change and a typeset preview, and the save happens only on
+accept. A proof-reader that fails returns 502 and the page saves as typed — this
+must never block an edit.
+
+It runs on the `checker` role rather than a sixth entry in `bp.yaml`: that is
+already a strong model everywhere, and pointing it somewhere cheaper is a
+one-line change (`tidy.ROLE`).
+
 ---
 
 ## 14. Recompile, jobs and resume
@@ -818,7 +890,14 @@ Relabel, Archive, Why.
 The **action bar** carries the support certificate, then Frontier, Recompile
 (which shows the dry-run bill and requires confirmation before spending),
 Render LaTeX (source, `.tex` download, and a compiled PDF when a TeX toolchain
-is present), Check, History and Agents.
+is present), Check, History, Agents and Preamble.
+
+What counts as mathematics for KaTeX is `$…$`, `$$…$$`, `\[…\]`, `\(…\)` **and a
+bare display environment** — `align`, `equation`, `gather`, `multline`,
+`alignat`, `flalign`, `eqnarray`, `displaymath`, `CD`, starred or not, with no
+delimiters around them, which is how people actually write. `aligned`, `cases`,
+`split` and the matrix environments are deliberately not matched standalone: they
+only occur inside mathematics, so the enclosing delimiter already covers them.
 
 ### Two things the interface must get right
 
@@ -826,7 +905,8 @@ is present), Check, History and Agents.
 `/api/node/{id}/stale-radius` and shows exactly which verifications the edit will
 invalidate — this node, and every node whose verification cited it. Only then
 does it write. Discovering the blast radius afterwards is how a user learns to
-distrust the tool.
+distrust the tool. Before both, the proof-reader has offered its rewrite — see
+§13 — and the author has accepted or rejected it.
 
 *No untrusted HTML, ever.* Statements and proofs are LaTeX written by models.
 Prose enters the DOM through `textContent`; mathematics goes through
@@ -866,15 +946,18 @@ locking row in `UPGRADE.md`, and L2 is what makes it easy to hit.
 | `GET /api/node/{id}/stale-radius` | what an edit would invalidate |
 | `GET /api/render[.tex|.pdf]` | the document |
 | `GET /api/recompile/plan` | the dry run — synchronous, because it costs nothing |
+| `GET /api/preamble` | `preamble.tex`, for the editor and the macro map |
 
 | Write | |
 |---|---|
-| `POST /api/node/{id}/{statement,proof,note,admit,assume,relabel,archive,child,children}` | one `ops` call each |
+| `POST /api/node/{id}/{statement,proof,note,admit,assume,relabel,archive,child,children,uses}` | one `ops` call each |
 | `POST /api/sweep` | re-derive and persist |
+| `POST /api/preamble` | replace `preamble.tex` |
+| `POST /api/tidy` | propose a syntax-only rewrite; writes nothing; 502 if the role fails, so the page can still save |
 
 | Jobs | |
 |---|---|
-| `POST /api/jobs/{expand,redo,check-decomp,verify,prove}/{id}` | returns a job id |
+| `POST /api/jobs/{expand,redo,check-decomp,verify,prove}/{id}` | returns a job id; `expand` takes `force` to overrule a decline |
 | `POST /api/jobs/{recompile,resume}` | returns a job id |
 | `GET /api/jobs[/{id}]` | status, step, call count, result |
 
@@ -883,7 +966,10 @@ locking row in `UPGRADE.md`, and L2 is what makes it easy to hit.
 ## 16. Not built yet
 
 **L3** is driven by the friction log from using L2, not planned in advance. Ask
-the user for theirs.
+the user for theirs. The first round of it is already in — bare display
+environments, the project preamble, the decomposer's verdict, and the
+proof-reader on save (`BUILD_LOG.md`, `DECISIONS.md` D039–D042) — and the list is
+open.
 
 See `UPGRADE.md` for what is deferred from the full design, and why each
 deferral is safe.

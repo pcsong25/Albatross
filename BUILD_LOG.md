@@ -460,3 +460,82 @@ only means anything when it costs something.
 
 `LIGHT.md` says not to plan L3 in advance, and to ask for the friction list at
 the end of L2. That is the next thing I need from you.
+
+---
+
+## L3, first round — driven by the friction log
+
+**Date** 2026-07-29
+
+`LIGHT.md` says not to plan L3 in advance and to build against the user's
+friction list. This is the first of it: they set every role to GPT-5.6 Sol at
+`max`/`xhigh` effort, entered a real theorem — uniqueness for the fractional heat
+equation — pressed Expand, and reported it running a long time on a simple
+problem, plus two LaTeX complaints.
+
+### The reported hang was not one
+
+Diagnosis from the machine, not from theory: `bp ui` had been up ten seconds, no
+`codex` process was running, `.bp/agent/` was empty, and the event log showed
+only `add_node` and two `edit_statement`. The server had been restarted, and job
+state lives in its memory with the model subprocess as its child — so the run was
+gone, not stuck.
+
+Timed the real thing to be sure: their exact decomposer prompt, at `max` effort,
+returned in **3 minutes 24 seconds** with a complete decomposition, seven
+hypotheses on its hardest child, and a note pointing out that the theorem does
+not say what "solution" means. The pipeline was working the whole time.
+
+`GUIDE.md` gained §5a — how to watch a run, what looks like a symptom and is not
+(an empty call log during a call; an unchanged `nodes/`), and the one thing that
+really does kill a run.
+
+### Built
+
+**Bare display environments render.** `\begin{align}…\end{align}` without
+surrounding dollars is ordinary LaTeX and the splitter did not know it, so it
+printed as source. Eleven math segments now detected in their statement where ten
+were before, and the align block typesets.
+
+**The document loads the packages people expect** — `mathtools`, `mathrsfs` added
+unconditionally; `bbm`, `enumitem`, `float` behind `\IfFileExists` so a machine
+without them still builds.
+
+**`preamble.tex`.** The user asked for somewhere to put their own macros. It goes
+three places, and the third is the one that matters: injected into the rendered
+document, parsed by the browser into KaTeX macros, and **included in every
+agent's context** — a model shown `\ip{u}{v} \in \Hs` and no definitions will
+invent a meaning and answer confidently about it.
+
+**The decomposer triages first.** It returns `decompose`, `prove-directly` or
+`already-atomic` with an assessed difficulty and two sentences of reasoning. On a
+decline nothing is written and the user is offered *Write the proof* or
+*Decompose anyway*.
+
+**Saving LaTeX runs a proof-reader.** Syntax only, diff shown, nothing written
+until accepted. Tested live on deliberately broken input: it closed
+`\begin{align}` that had been closed with `\end{aligned}`, added a missing
+parenthesis, and replaced an obsolete `\bf` — three fixes, one line of
+justification each, no mathematics touched.
+
+```
+pytest -q       280 passed
+```
+
+### What surprised me
+
+**KaTeX does not learn a `\newcommand` it has rendered.** The documented-looking
+trick of passing a shared `macros` object and letting definitions accumulate does
+not work in 0.16.11 — I checked rather than assumed, and the second render failed
+with "Undefined control sequence". So the preamble has to be parsed. An explicit
+macro map works fine, arguments and all.
+
+**`--force` that skips a check is not a force.** The first version of "decompose
+anyway" ignored the verdict rather than overruling it, so a model that declined
+twice produced an empty decomposition which was then written. Overruling belongs
+in the prompt: tell the model the user has decided otherwise, and treat a second
+decline as a repair round.
+
+**The user's own file was the best test input available.** Every one of the three
+LaTeX problems was visible in it, and none of them was visible in the fixture I
+had written — because I write `\[…\]` and they write `align`.

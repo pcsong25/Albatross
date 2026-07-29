@@ -738,3 +738,96 @@ The rows you are asked to fill in are then exactly the rows the discharge check
 will ask about, and there is no way to leave one out by forgetting it exists.
 That is the same argument as requiring the decomposer to return a complete
 table — the form is the anti-gap device, not the diligence of whoever fills it in.
+
+---
+
+## D039 — Bare display environments count as mathematics
+
+**Date** 2026-07-29 · **Milestone** L3 (friction log)
+
+The user's first real theorem contained `\begin{align} … \end{align}` with no
+dollar signs around it — which is ordinary LaTeX — and the browser printed it as
+literal source. The splitter only knew `$…$`, `$$…$$`, `\[…\]` and `\(…\)`.
+
+**Decision.** `align`, `equation`, `gather`, `multline`, `alignat`, `flalign`,
+`eqnarray`, `displaymath` and `CD`, starred or not, are recognised standalone and
+handed to KaTeX whole (it renders them directly, in display mode).
+
+**Not** included: `aligned`, `cases`, `split`, the matrix environments. Those only
+ever occur *inside* mathematics, so they are already covered by the surrounding
+delimiter, and matching them standalone would risk capturing an inner environment
+when the outer one was malformed.
+
+---
+
+## D040 — The project keeps its own LaTeX preamble, and three things read it
+
+**Date** 2026-07-29 · **Milestone** L3 (friction log)
+
+A statement written in the author's own macros is unreadable to KaTeX, missing
+from the rendered document, and — worst — **guessed at by every agent**. A model
+shown `\ip{u}{v} \in \Hs` and nothing else will invent a meaning and answer
+confidently.
+
+**Decision.** `preamble.tex` at the project root, optional. Injected verbatim
+into the rendered document; included in the context of every role; parsed by the
+browser into a KaTeX macro map.
+
+**Why the browser parses it rather than the server.** KaTeX takes a macro map but
+does not learn from a `\newcommand` it renders — verified, not assumed. So
+something must parse it, and the parse decides only how notation is *drawn*: it
+touches nothing about the graph, which is the line `bp/ui` is not allowed to
+cross. `\newcommand`, `\renewcommand`, `\providecommand`, `\DeclareMathOperator`
+(starred or not) and `\def` are handled, with arguments and nested braces.
+
+**Known gap.** KaTeX has no optional-argument default, so
+`\newcommand{\f}[2][x]{…}` loses the default. Documented in `GUIDE.md`.
+
+---
+
+## D041 — The decomposer judges difficulty before decomposing, and may decline
+
+**Date** 2026-07-29 · **Milestone** L3 (friction log)
+
+Reported: a simple problem cost a long `max`-effort decomposition. The decomposer
+was never asked whether the node deserved splitting — only to split it.
+
+**Decision.** `Decomposition` gains a `verdict`: `decompose`,
+`prove-directly`, or `already-atomic`, with an `assessed_difficulty` and a short
+`assessment`. On a decline nothing is written, the assessment is kept as a note,
+and the user is offered *Write the proof* or *Decompose anyway*. A pydantic
+validator ties the shape to the verdict: `decompose` requires 3–7 children and a
+reduction; the others require neither.
+
+**Why report rather than auto-prove** (the user's choice, offered as an
+alternative): auto-proving bypasses the prover's `routine`/`standard` guard and
+lets one model call decide both that a node needs no structure *and* what its
+proof is. Reporting costs one cheap round trip and keeps the structural decision
+with the mathematician.
+
+**Note on `--force`.** Overruling the verdict changes the *prompt* — the model is
+told the user has overruled it — rather than skipping the check. The first
+implementation skipped the check, and a model that declined anyway produced an
+empty decomposition that was silently applied.
+
+---
+
+## D042 — Saving a statement runs a proof-reader, and shows the rewrite first
+
+**Date** 2026-07-29 · **Milestone** L3 (friction log)
+
+**Decision.** `POST /api/tidy` proposes a syntax-only correction. It writes
+nothing. The browser shows the rewrite beside the original with a one-line reason
+per change, plus a typeset preview, and the author picks. A proof-reader that
+cannot run never blocks the save.
+
+**The constraint that makes it acceptable.** The prompt forbids touching the
+mathematics — not an index, not a quantifier, not the direction of an inequality
+— and requires that anything it thinks is mathematically wrong go into
+`concerns`, unchanged. Combined with showing the diff before writing, an agent
+never silently edits a mathematician's theorem, which is the same rule that keeps
+it away from `global_status`.
+
+**Why the `checker` role rather than a sixth role.** It is already a strong model
+in every configuration, and this is a small frequent call. Splitting it out is a
+one-line change in `bp/roles/tidy.py` when someone wants it cheaper.

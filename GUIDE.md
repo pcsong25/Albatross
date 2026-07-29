@@ -132,7 +132,14 @@ Most sessions look like this.
 blocked by three unproved lemmas is not a place to work; its lemmas are. It is
 ranked shallow-first, then by how many nodes each one gates.
 
-**2. Pick one and expand it.** **Expand** decomposes one level: 3–7 children,
+**2. Pick one and expand it.** **Expand** first asks *is this worth decomposing
+at all?* If the decomposer judges the node a single step, or an argument it could
+just write out, it says so and stops — nothing is written, the assessment becomes
+a note, and you are offered **Write the proof** or **Decompose anyway**. A lemma
+that is one integration by parts should be proved, not split into three
+sub-lemmas and a reduction.
+
+When it does decompose, it produces one level: 3–7 children,
 each a section or a major lemma. The hint box is prefilled with the node's
 `strategy` — use it. Naming the shape of the argument you have in mind ("bootstrap
 on the $L^\infty$ norm"; "case split on whether $a < 1/2$") is ten seconds of
@@ -180,6 +187,44 @@ top. `--clean` strips all of that — that version is the paper.
 
 ---
 
+## 5a. Watching a run, and telling slow from stuck
+
+Role calls take minutes. `max` effort through the Codex CLI runs a decomposition
+in roughly 3–10 minutes on a typical statement; a recompile makes twenty or more
+calls. Nothing is wrong until it is much longer than that.
+
+**In the browser**, the action bar shows `● Decomposing thm.main — decomposer
+(gpt-5.6-sol) — call 3`. The call counter is the signal: if it advances, work is
+happening; if it sits at 1 for half an hour, the model is thinking hard, not
+looping.
+
+**From a second terminal**, while it runs:
+
+```bash
+pgrep -af "codex exec"                       # is the subprocess alive?  ← trust this one
+curl -s localhost:8000/api/jobs | python3 -m json.tool
+tail -f ~/my-theorem/.bp/events.jsonl        # writes as they land
+ls -l ~/my-theorem/.bp/agent/                # calls that have RETURNED
+```
+
+Two things that look like symptoms and are not:
+
+- **`.bp/agent/` is empty during a long call.** A call is logged only *after* it
+  returns. An empty log during a run is expected.
+- **Nothing in `nodes/` yet.** A decomposition is checked in memory and written
+  only when it passes, so the graph does not change until the call is done.
+
+And one that *is*: **restarting `bp ui` kills the run.** Job state lives in the
+server's memory and the model subprocess is its child, so a restart loses both.
+The graph is safe — results are written as they land — but an in-flight call is
+gone and `bp calls` will show nothing for it. Durable job state is on the list in
+`UPGRADE.md`.
+
+If you want a run you can watch die, use the CLI instead: `bp expand <node>`
+blocks in your terminal and prints what happened.
+
+---
+
 ## 6. The detail panel, button by button
 
 | Button | What it does | When |
@@ -189,7 +234,7 @@ top. `--clean` strips all of that — that version is the paper.
 | **Generate proof** | Prover role. Writes into the Proof section; **never** sets a status | `routine` and `standard` leaves |
 | **Verify** | Obligations, then the panel, then confirmation. Sets `verified` or `flagged` | Any node with a proof |
 | **Check decomposition** | The two checker calls | Any node with children |
-| **edit** (Statement) | LaTeX textarea. On save, **warns which verifications it invalidates before committing** | |
+| **edit** (Statement) | LaTeX textarea. On save, the LaTeX is proof-read and any correction shown beside your original; then it **warns which verifications it invalidates before committing** | |
 | **edit** (Proof) | LaTeX textarea. Editing a proof stales nothing | |
 | **edit** (Discharges) | One input per hypothesis of each cited lemma | After adding a child by hand |
 | **Add child** | A lemma you state yourself, attached here | You know the lemma you want |
@@ -202,6 +247,47 @@ top. `--clean` strips all of that — that version is the paper.
 
 The chevron on a node in the graph (`▾`/`▸`, at its left edge) folds the subtree
 **in the view only** — nothing is written and the fold is gone on reload.
+
+---
+
+## 6a. Your own LaTeX
+
+**Standard LaTeX works.** `$…$`, `$$…$$`, `\[…\]`, `\(…\)`, and bare display
+environments — `align`, `equation`, `gather`, `multline`, `alignat`, `flalign`,
+starred or not — all typeset in the browser. The rendered document loads
+`amsmath`, `amssymb`, `amsthm`, `mathtools` and `mathrsfs` always, and `bbm`,
+`enumitem` and `float` when your TeX installation has them.
+
+**Your macros go in `preamble.tex`**, at the project root — the **Preamble**
+button in the action bar edits it, or `bp preamble --from myfile.tex`. It is
+used in three places, which is the point:
+
+- injected verbatim into the rendered document;
+- shown to **every agent** as context, so a statement written in your notation is
+  read correctly rather than guessed at;
+- parsed by the browser into KaTeX macros, so it typesets on screen.
+
+`\newcommand`, `\renewcommand`, `\providecommand`, `\DeclareMathOperator`
+(with or without `*`) and `\def` are all understood, including arguments:
+
+```latex
+\newcommand{\RR}{\mathbb{R}}
+\newcommand{\ip}[2]{\langle #1, #2 \rangle}
+\DeclareMathOperator{\supp}{supp}
+```
+
+One limitation: KaTeX has no equivalent of an optional-argument default, so
+`\newcommand{\f}[2][x]{…}` loses the default. Everything else carries over.
+
+**Saving a statement or proof runs a proof-reader first.** It may fix syntax — an
+unbalanced brace, `\end{aligned}` closing a `\begin{align}`, an obsolete `\bf`
+— and it is forbidden from touching the mathematics. You see the rewrite beside
+your original with a one-line reason for each change, and nothing is saved until
+you pick one. If it ever changes a symbol, an index or the direction of an
+inequality, that is a bug: tell me.
+
+If the proof-reader cannot run, the save goes through as you typed it. It never
+blocks you.
 
 ---
 
