@@ -232,18 +232,35 @@ def test_sweep_is_idempotent(project, seed):
 
 
 def test_shipped_fixture_has_the_statuses_it_advertises(fixture_project):
+    """The shipped development, including the subtree the L1 acceptance run
+    produced under `gclm.elb-b`."""
     graph, diagnostics, ok = load_graph(fixture_project)
     assert ok
-    expected = {
-        "gclm.elb-a": PROVED,
-        "gclm.elb-b": PROVED_MODULO,
-        "gclm.energy-lower-bound": PROVED_MODULO,
-        "gclm.local-existence": BLOCKED_UNVERIFIED,
-        "gclm.blowup-criterion": BLOCKED_STALE,
-        "gclm.blowup": BLOCKED_CHILDREN,
-    }
-    assert {n.id: n.global_status for n in graph.active.values()} == expected
-    assert graph["gclm.blowup"].blocked_by == [
-        "gclm.local-existence",
-        "gclm.blowup-criterion",
-    ]
+    statuses = {n.id: n.global_status for n in graph.active.values()}
+    assert statuses["gclm.elb-a"] == PROVED
+    assert statuses["gclm.energy-lower-bound"] == PROVED_MODULO
+    assert statuses["gclm.blowup"] == BLOCKED_CHILDREN
+
+    # The L1 acceptance run verified this one, so it moved from
+    # blocked:unverified to proved. The verifier panel did that, not a human.
+    assert statuses["gclm.local-existence"] == PROVED
+
+    # And flagged this one, with a correct counterexample: `T` is an arbitrary
+    # interval endpoint, not the maximal existence time, so the statement's
+    # blow-up clause is false as written. Staleness still takes priority in the
+    # sweep — the certificate is against an older statement either way.
+    criterion = graph["gclm.blowup-criterion"]
+    assert criterion.local_status == "flagged"
+    assert criterion.flags
+    assert statuses["gclm.blowup-criterion"] == BLOCKED_STALE
+    assert graph["gclm.blowup"].blocked_by == ["gclm.blowup-criterion"]
+
+    # `gclm.elb-b` is admitted, so it stays proved_modulo on its own id even
+    # though the decomposer has since given it open children. An admission is a
+    # statement about the node, not about what sits under it.
+    elb_b = graph["gclm.elb-b"]
+    assert elb_b.local_status == "admitted"
+    assert elb_b.global_status == PROVED_MODULO
+    assert elb_b.support == ["gclm.elb-b"]
+    assert len(elb_b.children) == 3
+    assert all(statuses[c] == OPEN for c in elb_b.children)

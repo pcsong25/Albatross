@@ -51,3 +51,37 @@ def project(tmp_path: Path) -> Project:
 def fixture_project() -> Project:
     """The real six-node development shipped in ``nodes/``."""
     return Project(Path(__file__).resolve().parent.parent)
+
+
+# --- L1 helpers ---------------------------------------------------------------
+
+
+def scripted_registry(project: Project, log=None, **role_responses: Any):
+    """A :class:`Registry` whose roles return canned replies.
+
+    Roles not named get an empty script, so a role that makes an unexpected call
+    fails loudly rather than reaching the network.
+    """
+    from bp.agents.log import NullLog
+    from bp.agents.registry import Config, Registry, RoleConfig, ROLES
+
+    roles = {}
+    for role in ROLES:
+        roles[role] = RoleConfig(
+            backend="scripted",
+            model=f"scripted-{role}",
+            options={"responses": list(role_responses.get(role, []))},
+        )
+    config = Config(roles=roles)
+    return Registry(project, config, log=log if log is not None else NullLog())
+
+
+def json_reply(payload: Any, *, wrap: bool = False) -> str:
+    """Serialise a scripted reply, optionally in the preamble+fence shape a CLI
+    backend produces."""
+    import json
+
+    body = json.dumps(payload, ensure_ascii=False)
+    if wrap:
+        return f"Sure — here is the decomposition.\n\n```json\n{body}\n```\n\nHope that helps."
+    return body
