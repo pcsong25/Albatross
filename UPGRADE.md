@@ -92,9 +92,23 @@ rather than a prerequisite.
 | **State as a fold over the event log** — time travel, blame, branching | §6 | `bp/events.py` gains a reducer; `ops.py` writes events first and derives files from them | 1–2 weeks | You want to branch a decomposition, or to answer "what did this node look like last Tuesday". The log is already append-only and honest, so this is additive. |
 | **Recompile tiers T0–T3** | §9 | `bp/recompile.py` | 2 days | v0's recompile is the model tier only: it selects nodes and verifies them. The cheap tiers (parse, deterministic checks, sweep) exist but are not wired into it as a gate that runs *below* the agents. The signal is paying for a verification of a node that `bp check` would have rejected for free. |
 | **Watch mode** — run the deterministic tiers on file save | §9 "Watch mode" | new `bp/watch.py`; `watchfiles` is already a dependency | 1 day | You are editing LaTeX and running `bp check` by hand after every save. This is the Lean-in-an-editor interaction shape and it is cheap; it was left out of L1 only because L2's UI may subsume it. |
-| **Locking and checkpointing for concurrent runs** | §11 | `bp/locking.py` (does not exist) | 2 days | **Sharpened by L1.** Two `bp` processes, or the L2 UI and a CLI, write at once. Atomic writes make a corrupt *file* unlikely, but two concurrent recompiles will both write the obligation cache and the last one wins, silently discarding the other's paid results. The signal is running the UI and the CLI at the same time — which L2 makes easy. |
+| **Cross-process locking** | §11 | `bp/locking.py` (does not exist) | 2 days | **Now the most likely thing to bite.** Within one process, `ops.serialised` orders every mutation, so the UI's worker thread and its request handlers are safe. Two *processes* are not: `bp ui` in one terminal and `bp verify` in another will both write the obligation cache and the last one wins, silently discarding the other's paid results. L2 makes this arrangement natural — the signal is you doing it. A PID lockfile on `.bp/` is most of the fix. |
 | **Race safety on verification results** — write each result with the signature it was computed against, discard results whose signature has moved | §9 "Race safety" | `bp/roles/verify.py` | half a day | A long verification finishes after the user has edited the statement. Today the certificate is written against the *current* hashes, so a verification of the old text can be recorded as current. Staleness catches the common case, but not this one. |
 | **Lean-lite** — one Lean file per node, unproved leaves as axioms, the reduction as a theorem | §17 | separate `lean/` directory, `formalized` flag | 2+ weeks | You want machine-checked reductions. Fully parallel to everything else; abandoning it costs nothing. |
+
+---
+
+## The interface
+
+L2 exists, so these are increments on a working UI.
+
+| Feature | `DESIGN.md` | Touches | Effort | Signal |
+|---|---|---|---|---|
+| **Per-node agent-call history in the detail panel** | §10 log | `bp/ui/app.py`, `app.js`; the call log already has everything | 1 day | You want to know what the decomposer was actually told about this node, and find yourself running `bp calls --show` in a terminal beside the browser. `LIGHT.md` L3 lists it. |
+| **Keyboard navigation** | — | `app.js` | 1 day | You are clicking through a forty-node graph and want `j`/`k`/`enter`. `LIGHT.md` L3 lists it. |
+| **Live updates instead of a 2s poll** | — | `bp/ui/app.py` (SSE), `app.js` | 1 day | The poll is fine for one user on localhost, which is the whole design. It stops being fine if two people ever watch the same project. |
+| **Durable job state** | §11 | `bp/ui/jobs.py` | half a day | The UI's job table is in memory: restart the server mid-decomposition and the spinner is gone, though the work is not — results write through `ops` as they land. The signal is wanting to close the laptop and come back. |
+| **Watch mode wired to the browser** | §9 "Watch mode" | `bp/watch.py`, SSE | 1 day | You edit a node file in your own editor and want the page to notice. `watchfiles` is already a dependency. |
 
 ---
 

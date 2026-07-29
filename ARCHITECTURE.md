@@ -768,15 +768,122 @@ network.
 
 ---
 
-## 15. Not built yet
+## 15. The web interface
 
-**L2 — the web UI.** FastAPI plus vanilla JS, Cytoscape.js for the graph, KaTeX
-for the mathematics, no build step. Every endpoint calls an existing `ops.py` or
-role function; the UI contains no logic of its own. Role calls run as background
-jobs with a live progress indicator, because an expand takes minutes and the
-interface must never appear frozen.
+`bp ui` serves it; this is the intended daily surface and the CLI is the testing
+scaffold. FastAPI, vanilla JavaScript, no build step and no npm — Cytoscape for
+the graph and KaTeX for the mathematics, either from a CDN or vendored locally by
+`bp ui --vendor`. A webpack config would be a liability for the person
+maintaining this.
 
-**L3** is driven by the friction log from using L2, not planned in advance.
+Two rules shape the whole package.
+
+**The interface contains no logic of its own.** Every endpoint is a thin wrapper
+around a function that already exists in `ops.py`, `roles/`, or the derived
+layer. Nothing in `bp/ui/` decides a status, computes a support set, ranks a
+frontier or interprets a diagnostic. When the interface needed a derived fact it
+did not have — the ranked frontier — the ranking went into `bp/frontier.py` and
+the endpoint returns it. That is what keeps the browser and the terminal from
+telling the user two different stories about the same graph, and the UI tests
+assert it directly by comparing the endpoint's answer to the core's.
+
+**Nothing blocks.** Reads derive in memory and answer in milliseconds. Role calls
+go to a worker thread; the request returns a job id and the page polls every two
+seconds. The agent layer's `observer` hook reports each call as it starts, so the
+strip in the action bar says *"Decomposing gclm.critical-scale-domination —
+decomposer (default) — call 1"* rather than showing an anonymous spinner for four
+minutes.
+
+### Layout
+
+Graph left, detail right, action bar on top.
+
+The **graph panel** is Cytoscape with a hierarchical (`breadthfirst`) layout.
+Fill encodes `global_status` — green proved, blue-green proved-modulo, amber
+blocked, grey open, red unsound — with a dashed border for stale and a thicker
+one for flagged. The chevron at a node's left edge folds its subtree **in the
+view only**: no request is made, nothing is written, and the fold is a property
+of that browser tab. The legend is always visible and can be collapsed when a
+wide graph reaches it.
+
+The **detail panel** renders the statement and proof with KaTeX — typeset
+mathematics, never raw source — with an *edit* toggle that swaps in a textarea of
+the LaTeX. The user writes source and reads it typeset; there is no rich-text
+editor. Node ids in backticks become links. The status line spells out `support`
+and `blocked_by` rather than leaving ids for the reader to chase, and the
+buttons beneath cover every operation: Expand, Redo, Generate proof, Verify,
+Check decomposition, Add child, Add note, Mark admitted, Mark assumption,
+Relabel, Archive, Why.
+
+The **action bar** carries the support certificate, then Frontier, Recompile
+(which shows the dry-run bill and requires confirmation before spending),
+Render LaTeX (source, `.tex` download, and a compiled PDF when a TeX toolchain
+is present), Check, History and Agents.
+
+### Two things the interface must get right
+
+*Editing a statement warns before it commits.* The Save button first asks
+`/api/node/{id}/stale-radius` and shows exactly which verifications the edit will
+invalidate — this node, and every node whose verification cited it. Only then
+does it write. Discovering the blast radius afterwards is how a user learns to
+distrust the tool.
+
+*No untrusted HTML, ever.* Statements and proofs are LaTeX written by models.
+Prose enters the DOM through `textContent`; mathematics goes through
+`katex.renderToString`, whose output is the only HTML the script inserts. In the
+terminal, mishandling this was cosmetic — `\[` displayed as `[`. In a browser it
+is script execution, and a test asserts there is exactly one `innerHTML`
+assignment in the file.
+
+### Concurrency
+
+One worker thread, so one role call at a time. Individual mutations are ordered
+by `bp.ops.serialised`, a process-wide re-entrant lock: a mutation is *read the
+graph, change it, sweep, write the derived fields*, and two of those interleaving
+would let one sweep persist values computed before the other's edit.
+
+A job does **not** hold that lock across its whole body. It did at first, and
+that froze every edit in the interface for the minutes a decomposition takes,
+including edits to nodes the job would never touch. Instead, an operation on a
+node an agent is currently working on is **refused** with a 409 naming the node —
+and the page has already disabled those buttons. The rest of the graph stays
+live, which is what the brief asks for.
+
+Two *processes* — a UI and a CLI at once — are still unguarded. That is the
+locking row in `UPGRADE.md`, and L2 is what makes it easy to hit.
+
+### The API surface
+
+| Read | |
+|---|---|
+| `GET /api/graph` | nodes, edges, counts, the support certificate |
+| `GET /api/node/{id}` | everything the detail panel shows, including obligations |
+| `GET /api/why/{id}` | the explanation chain, as depth-tagged lines |
+| `GET /api/check` | every diagnostic |
+| `GET /api/frontier` | the ranked queue |
+| `GET /api/events` | the log, newest first |
+| `GET /api/agents` | roles, backends, budget, calls logged |
+| `GET /api/node/{id}/stale-radius` | what an edit would invalidate |
+| `GET /api/render[.tex|.pdf]` | the document |
+| `GET /api/recompile/plan` | the dry run — synchronous, because it costs nothing |
+
+| Write | |
+|---|---|
+| `POST /api/node/{id}/{statement,proof,note,admit,assume,relabel,archive,child,children}` | one `ops` call each |
+| `POST /api/sweep` | re-derive and persist |
+
+| Jobs | |
+|---|---|
+| `POST /api/jobs/{expand,redo,check-decomp,verify,prove}/{id}` | returns a job id |
+| `POST /api/jobs/{recompile,resume}` | returns a job id |
+| `GET /api/jobs[/{id}]` | status, step, call count, result |
+
+---
+
+## 16. Not built yet
+
+**L3** is driven by the friction log from using L2, not planned in advance. Ask
+the user for theirs.
 
 See `UPGRADE.md` for what is deferred from the full design, and why each
 deferral is safe.

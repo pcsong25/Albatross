@@ -558,3 +558,128 @@ cannot reach it by accident.
 
 **Alternative.** A test-only fixture that monkey-patches `Backend.invoke`.
 Rejected: it would bypass the registry, which is exactly the layer worth testing.
+
+---
+
+## D030 — The frontier ranking lives in the core, not in the interface
+
+**Date** 2026-07-29 · **Milestone** L2
+
+The brief puts the frontier queue in the action bar and specifies its ranking:
+"nodes awaiting a decision, ranked shallow-first then by how many nodes they
+gate".
+
+**Decision.** `bp/frontier.py`, with `bp frontier` on the CLI and
+`GET /api/frontier` in the UI, both returning the same list.
+
+**Why.** It is a derivation over the graph, and the rule "the UI contains no
+logic of its own" is only meaningful if it is followed when it costs something.
+A ranking computed in JavaScript would be a second opinion about the graph, and
+the moment the CLI grew a frontier command the two would disagree.
+
+**The definition, which the brief left open.** A node is on the frontier when it
+is unfinished **and every active child is finished**. That second clause is what
+makes the list actionable: a theorem blocked by three unproved lemmas is not a
+place to work, it is a place to wait — its lemmas are. It matches
+`DESIGN.md` §6's `frontier` predicate.
+
+---
+
+## D031 — Cytoscape and KaTeX load from a CDN, with `bp ui --vendor` for offline
+
+**Date** 2026-07-29 · **Milestone** L2
+
+The brief says "from a CDN or vendored".
+
+**Decision.** Both. The page prefers `static/vendor/` when it exists and falls
+back to jsDelivr; `bp ui --vendor` downloads 23 files (~1 MB) into that
+directory.
+
+**Why not CDN alone.** The deterministic half of this system works with no
+network — `bp check`, `bp why`, `bp render`, and every agent call under
+`--replay`. It would be a poor joke if the interface to it did not.
+
+**Why not vendored alone.** A megabyte of minified JavaScript and twenty font
+files in the repository, for a user who may never work offline, and which then
+have to be updated by hand.
+
+Only `.woff2` fonts are fetched. Every browser of the last decade takes them and
+the `.woff`/`.ttf` fallbacks would triple the download for no living user.
+
+---
+
+## D032 — A running job refuses conflicting work; it does not block it
+
+**Date** 2026-07-29 · **Milestone** L2
+
+The first implementation held a write lock for the whole body of a job. It was
+found by driving the acceptance session: with a decomposition running, *every*
+edit in the interface hung, including edits to unrelated nodes.
+
+**Decision.** Two changes. Ordering moved to `bp.ops.serialised`, a process-wide
+re-entrant lock taken by each mutation individually — a mutation is *read, edit,
+sweep, write derived fields*, and two of those interleaving would let one sweep
+persist values computed before the other's edit. And an operation on a node an
+agent is working on is refused with a 409 naming the node, rather than queued
+behind it.
+
+**Why refuse rather than queue.** The request returns at once with something the
+user can act on, and it matches the brief: "a running job disables the buttons
+that would conflict with it and leaves the rest live." A queued edit that lands
+four minutes later, on top of whatever the agent wrote, is worse than being told
+no.
+
+**Still unguarded.** Two *processes*. `UPGRADE.md` has the row, and it is sharper
+now: running the UI and a CLI at once is easy.
+
+---
+
+## D033 — The whole-graph read is one endpoint, not one per node
+
+**Date** 2026-07-29 · **Milestone** L2
+
+**Decision.** `GET /api/graph` returns every active node's summary plus the
+edges, counts and certificate in one response; `GET /api/node/{id}` returns the
+full detail for the selected one only.
+
+**Why.** The graph panel needs status for every node at once and the detail panel
+needs everything about exactly one. Splitting it that way means a redraw after a
+mutation is two requests rather than forty, and the detail payload can afford to
+carry the obligations and the `why` chain without paying for them per node.
+
+---
+
+## D034 — The interface renders a PDF when a TeX toolchain is present
+
+**Date** 2026-07-29 · **Milestone** L2
+
+The brief says the Render LaTeX button "opens the document; a download button".
+
+**Decision.** Three things: the source in a panel, a `.tex` download, and an
+*Open PDF* button that runs `pdflatex` twice and serves the result. Without
+`pdflatex` on `PATH` the PDF endpoint returns 501 with a message pointing at the
+download, and the other two still work.
+
+**Why.** For a mathematician "the document" means the typeset one, and the
+toolchain is already assumed by the milestone's own acceptance criterion that
+the LaTeX compiles. Failing softly when it is absent keeps the interface usable
+on a machine without TeX.
+
+---
+
+## D035 — The chevron is the node's left edge, and folding is view-only
+
+**Date** 2026-07-29 · **Milestone** L2
+
+The brief: "the chevron on a node collapses its subtree in the **view only**,
+with zero graph mutation."
+
+**Decision.** Each node with children carries `▾`/`▸` at the start of its label.
+A tap inside the leftmost 22 pixels of the node's bounding box folds; a tap
+anywhere else selects. Folded state is a `Set` in the page — no request is made
+and nothing is written, so it is a property of that browser tab and vanishes on
+reload.
+
+**Alternatives.** Double-click to fold (invisible, undiscoverable) or a fold
+button in the detail panel (works, but then it is not on the node, and the point
+is to prune the picture while looking at the picture).

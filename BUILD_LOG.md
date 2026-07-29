@@ -295,3 +295,147 @@ how the rest of the system treats debt; and the shipped `bp.yaml` points at the
 subscription CLIs because that is what runs on this machine (D026) — with the
 consequence, stated in the file, that the dollar cap can never fire and the call
 cap is the only real limit.
+
+---
+
+## L2 — Web UI
+
+**Date** 2026-07-29
+
+### What was built
+
+The interface the system was always for. `bp ui` serves a FastAPI app and a
+vanilla-JavaScript page — no build step, no npm, Cytoscape and KaTeX either from
+a CDN or vendored locally by `bp ui --vendor`.
+
+Two rules shaped it, and both were tested rather than asserted:
+
+**The interface contains no logic of its own.** Every endpoint is a thin wrapper
+around something in `ops.py`, `roles/`, or the derived layer. When the interface
+needed a derived fact it did not have — the ranked frontier — the ranking went
+into `bp/frontier.py`, where the CLI can reach it too. `tests/test_ui.py` asserts
+the endpoint's answer equals the core's, node by node.
+
+**Nothing blocks.** Role calls run on a worker thread and the page polls. The
+agent layer grew an `observer` hook so the action bar can say which agent is
+working rather than showing an anonymous spinner.
+
+### Files added
+
+```
+bp/frontier.py          the ranked queue — core, not interface
+bp/ui/app.py            FastAPI; 32 endpoints, each one ops.py or roles/ call
+bp/ui/jobs.py           background role calls
+bp/ui/assets.py         `bp ui --vendor`
+bp/ui/static/index.html app.js style.css   (+ vendor/, 23 files, ~1 MB)
+bp/cli_ui.py            `bp ui`
+tests/test_ui.py        33 tests (+34 total, 261)
+```
+
+### What the acceptance session showed
+
+Driven through the same HTTP endpoints the page calls, against the live server,
+with Chrome rendering the page for the visual checks.
+
+The graph draws with status fills, a dashed border on the stale node and chevrons
+on nodes with children. The detail panel typesets the statement and proof with
+KaTeX — display maths, inline maths, and node ids as live cross-references — and
+the status line spells out `blocked_by` rather than leaving an id to chase.
+
+The session, in order:
+
+- **Check** — the planted `DIS011` and the `DIS100` admission, unchanged.
+- **Edit a statement, with the warning first.** The preview named both
+  verifications the edit would invalidate (`gclm.blowup` and the node itself);
+  the commit reported staling exactly those two.
+- **Promote a child manually** — `gclm.hilbert-kernel-split`, typed as LaTeX.
+- **Mark a node admitted** — with the empty-reason case correctly refused: *"admit
+  requires a reason — it is what the support certificate prints."*
+- **Recompile** — the dry-run bill first: two stale nodes, nine calls, and the
+  note that confirmation calls cannot be predicted. The run then made **thirteen**,
+  which is the preview's caveat being right rather than wrong.
+- **Why** on a blocked node, and **the document**: LaTeX in a panel, a `.tex`
+  download, and a 246 KB PDF from the Open PDF button.
+- **Reload** — every change persisted: the new node, the admission, and the two
+  nodes the statement edit staled.
+
+A real decomposition was also started from the browser to photograph the async
+path: the action bar showed *"● Decomposing gclm.critical-scale-domination —
+decomposer (default) — call 1"* while the graph and the rest of the interface
+stayed live.
+
+```
+pytest -q       261 passed
+```
+
+### The statement edit was a real fix, not a demonstration
+
+The L1 verifier found that `gclm.blowup-criterion` claimed $z \to \infty$ as
+$t \to T^-$ when $T$ is an arbitrary interval endpoint rather than the maximal
+existence time. The acceptance session used the edit-statement flow to correct
+it — the bound $T \le 1/(\kappa z(0))$ always holds, the blow-up clause now says
+"if moreover $[0,T)$ is maximal" — watched the warning name both affected
+verifications, committed, and recompiled to have the fix re-checked.
+
+Found by an agent, fixed by a human, re-verified by an agent, with the graph
+tracking what that invalidated at every step. That is the loop this whole system
+exists to close, and it ran end to end in a browser.
+
+### What surprised me
+
+**A lock held across a job froze the entire interface.** The job runner
+originally took a write lock for the duration of a role call. With a
+decomposition running, *every* edit anywhere hung — including on nodes the job
+would never touch. The tests did not catch it because none of them ran a slow job
+alongside an edit; driving the acceptance session did, immediately, when a `curl`
+sat for two minutes and timed out.
+
+The fix moved ordering to where it belongs: `bp.ops.serialised`, a process-wide
+lock taken per mutation, because a mutation is *read the graph, edit, sweep,
+write the derived fields* and two of those interleaving would let one sweep
+persist values computed before the other's edit. Conflicting *operations* are now
+refused with a 409 naming the node, which is what the brief asked for all along —
+"a running job disables the buttons that would conflict with it and leaves the
+rest live". Two tests now cover it.
+
+**The dry-run's honesty was vindicated within the hour.** The preview said nine
+calls and printed the caveat that confirmation calls happen only for objections
+and cannot be counted in advance. The run made thirteen. A preview that had
+quietly rounded to a confident number would have been wrong; the one that named
+its own blind spot was right.
+
+**`rich` and `innerHTML` are the same bug at different stakes.** In L1,
+mishandling model-written LaTeX made `\[` display as `[`. In a browser the same
+mistake executes it. The page therefore puts prose in through `textContent` and
+mathematics through `katex.renderToString`, and a test counts the `innerHTML`
+assignments in `app.js` — there is exactly one, and it takes KaTeX output.
+
+**The legend collided with the graph, twice.** Bottom-left is where a deep tree
+puts its leaves; top-right is where a wide one puts its. It is now top-right and
+collapsible, which is the only answer that survives both.
+
+### One deviation from the brief, flagged
+
+The L2 button table says *"Check decomposition | the three checker calls"*. The
+agent-layer specification in the same document says two, explicitly, and says not
+to ask the third — hypothesis availability is answered better by the discharge
+check (completeness, deterministically) and the verifier (entailment, one narrow
+obligation at a time). L1 built two and L2 shows two. This is the earlier
+discrepancy, unchanged; say so if you want the third.
+
+### What was deferred, and why
+
+Everything still on `UPGRADE.md`, plus the interface rows L2 made concrete:
+per-node agent-call history, keyboard navigation, live updates instead of the
+two-second poll, durable job state, and watch mode wired to the browser. None of
+them is needed until the friction log says so.
+
+Six decisions the brief did not settle are recorded in `DECISIONS.md`
+(D030–D035). The one worth flagging: the frontier ranking went into the core
+rather than into JavaScript (D030), because "the UI contains no logic of its own"
+only means anything when it costs something.
+
+### Ready for L3
+
+`LIGHT.md` says not to plan L3 in advance, and to ask for the friction list at
+the end of L2. That is the next thing I need from you.
