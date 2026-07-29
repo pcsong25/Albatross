@@ -5,8 +5,28 @@ children: []
 strategy: null
 difficulty: routine
 lifecycle: active
-local_status: verified
-flags: []
+local_status: flagged
+flags:
+  - kind: counterexample
+    section: statement
+    quote: and $z(t) \to \infty$ as $t \to T^-$.
+    why: 'The final step is a genuine non-sequitur: the inequality $1/z(t) \le 1/z(0) - \kappa t$ only forces $1/z(t) \to 0$ when $T = 1/(\kappa z(0))$, and since $T \in (0,\infty]$ is an arbitrary interval endpoint rather than the maximal existence time, the blowup conclusion fails outright for $\kappa = 1$, $T = 1/2$, $z(t) = 1/(1-t)$, where $z(t) \to 2$.'
+    raised_by: verifier_a:opus
+  - kind: non-sequitur
+    section: proof
+    quote: Letting $t \to T^-$ in the displayed inequality gives $1/z(t) \to 0$, so $z(t) \to \infty$.
+    why: 'The final step needs $T$ to be maximal, which is nowhere assumed: with $\kappa = 1$, $z(t) = 1/(1-t)$ on $[0, T)$ with $T = 1/2$ all hypotheses hold and $T \le 1/(\kappa z(0)) = 1$, yet $z(t) \to 2$, so the asserted $z(t) \to \infty$ as $t \to T^-$ is false as stated and the inequality $1/z(t) \le 1/z(0) - \kappa t$ only forces $1/z(t) \to 0$ when $T = 1/(\kappa z(0))$.'
+    raised_by: verifier_a:opus
+  - kind: counterexample
+    section: statement
+    quote: and $z(t) \to \infty$ as $t \to T^-.$
+    why: 'The conclusion $z(t) \to \infty$ as $t \to T^-$ does not follow, because $T$ is not assumed maximal: the integrated inequality only gives $1/z(t) \le 1/z(0) - \kappa t$, whose right-hand side tends to $1/z(0) - \kappa T > 0$ unless $T = 1/(\kappa z(0))$, and the admissible datum $\kappa = 1$, $T = 1/2$, $z(t) = 1/(1-t)$ satisfies every hypothesis while $z$ stays bounded by $2$.'
+    raised_by: verifier_b:default
+  - kind: unjustified-limit
+    section: proof
+    quote: Letting $t \to T^-$ in the displayed inequality gives $1/z(t) \to 0$, so $z(t) \to \infty$.
+    why: 'The blow-up conclusion needs $T$ to be the maximal existence time, equivalently $T = 1/(\kappa z(0))$, and nothing in the hypotheses forces that: $\kappa = 1$, $z(t) = 1/(1-t)$ on $[0, T)$ with $T = 1/2$ satisfies H1 and H2 yet $z(t) \to 2$, so the final step of the proof — and the corresponding clause of the statement — is false as written.'
+    raised_by: verifier_b:default
 
 hypotheses:
   - {id: H1, tex: "z \\in C^1([0,T)) \\text{ and } z(0) > 0"}

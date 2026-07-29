@@ -36,7 +36,6 @@ uses:
 global_status: blocked:children
 support: []
 blocked_by:
-  - gclm.local-existence
   - gclm.blowup-criterion
 statement_hash: '97d9825d910a'
 verified_against:

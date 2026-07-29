@@ -1,0 +1,23 @@
+{
+  "id": "20260729-204601-35fc84",
+  "kind": "recompile",
+  "params": {
+    "only": [],
+    "calls": 4
+  },
+  "tasks": [
+    "verify:gclm.blowup-criterion",
+    "verify:gclm.local-existence"
+  ],
+  "completed": [
+    "verify:gclm.blowup-criterion",
+    "verify:gclm.local-existence"
+  ],
+  "status": "done",
+  "started_at": "2026-07-29T20:46:01+00:00",
+  "finished_at": "2026-07-29T20:58:24+00:00",
+  "notes": [
+    "gclm.blowup-criterion: flagged",
+    "gclm.local-existence: verified"
+  ]
+}
