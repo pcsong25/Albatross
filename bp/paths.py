@@ -38,6 +38,17 @@ class Project:
         return self.state_dir / "events.jsonl"
 
     @property
+    def preamble_path(self) -> Path:
+        """The user's own LaTeX preamble: macros, \\newcommands, packages.
+
+        Optional. When present it is injected into the rendered document, shown
+        to every agent as context, and parsed into KaTeX macros by the browser —
+        so a statement written in the user's own notation reads correctly in all
+        three places instead of only in their head.
+        """
+        return self.root / "preamble.tex"
+
+    @property
     def attempts_dir(self) -> Path:
         """Where ``bp redo`` parks a subtree before regenerating it (L1)."""
         return self.root / "attempts"

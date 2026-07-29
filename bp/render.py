@@ -383,6 +383,7 @@ def document(
     audit: bool = False,
     title: str | None = None,
     today: str | None = None,
+    preamble: str = "",
 ) -> str:
     main_ids, rest_ids = order_entries(graph)
     entries = [_entry(graph[i], graph, clean, audit) for i in main_ids]
@@ -398,6 +399,7 @@ def document(
     template = _environment().get_template("document.tex.j2")
     return template.render(
         title=title,
+        preamble=preamble.strip(),
         date=today or date.today().isoformat(),
         clean=clean,
         certificate=certificate(graph),

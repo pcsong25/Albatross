@@ -34,6 +34,26 @@ def _hyp_block(node: Node) -> str:
     return "\n".join(f"- {h.id}: {h.tex}" for h in node.hypotheses)
 
 
+def preamble_block(project) -> str:
+    """The project's LaTeX preamble, for the agents.
+
+    Without it a statement written in the user's own macros is unreadable — a
+    model shown ``\\ip{u}{v} \\in \\HH`` and nothing else is guessing. This is
+    cheap context and it prevents a whole class of confident nonsense.
+    """
+    from .. import ops
+
+    text = ops.read_preamble(project).strip()
+    if not text:
+        return ""
+    return (
+        "## The project's LaTeX preamble\n\n"
+        "Every statement below is written against these definitions. Use the same "
+        "macros when you write mathematics back.\n\n"
+        f"```latex\n{text}\n```"
+    )
+
+
 def node_block(node: Node, *, heading: str = "Node", proof: bool = True) -> str:
     """One node, rendered for a prompt."""
     parts = [

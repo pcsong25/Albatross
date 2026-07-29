@@ -90,6 +90,7 @@ def check_decomposition(
     report = CheckReport(node=node_id)
 
     common = context.join(
+        context.preamble_block(project),
         context.setting(graph, node),
         context.node_block(node, heading="The node"),
         context.children_block(graph, node),

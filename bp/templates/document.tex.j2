@@ -5,8 +5,16 @@
 \usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{amsthm}
+\usepackage{mathtools}
+\usepackage{mathrsfs}
 \usepackage[dvipsnames]{xcolor}
 \usepackage[colorlinks=true,linkcolor=RoyalBlue,citecolor=RoyalBlue,urlcolor=RoyalBlue]{hyperref}
+
+% Commonly wanted, but not in every TeX installation. Loaded only if present, so
+% a missing one degrades the typesetting instead of breaking the build.
+\IfFileExists{bbm.sty}{\usepackage{bbm}}{}
+\IfFileExists{enumitem.sty}{\usepackage{enumitem}}{}
+\IfFileExists{float.sty}{\usepackage{float}}{}
 
 \theoremstyle{plain}
 \newtheorem{theorem}{Theorem}
@@ -38,6 +46,15 @@
 \newcommand{\bpmark}[3]{}
 \newcommand{\bphyp}[1]{\par\noindent{\small\textit{Hypotheses.} #1}\par\smallskip}
 \newcommand{\bpaudit}[1]{}
+((* endif *))
+
+((* if preamble *))
+% ---------------------------------------------------------------------------
+% The project's own preamble, from preamble.tex. Passed through verbatim: your
+% macros are yours, and rewriting them would change what your statements mean.
+% ---------------------------------------------------------------------------
+(((preamble)))
+% --- end of preamble.tex ---------------------------------------------------
 ((* endif *))
 
 \title{(((title)))}

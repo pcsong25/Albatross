@@ -96,6 +96,7 @@ def prove(
 
     agent = registry.agent("prover")
     user = context.join(
+        context.preamble_block(project),
         context.setting(graph, node),
         context.node_block(node, heading="The lemma to prove", proof=False),
         context.siblings_available(graph, node),

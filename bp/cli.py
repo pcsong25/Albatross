@@ -296,7 +296,10 @@ def render(
 ) -> None:
     """Render the whole graph to a compilable LaTeX document."""
     project, graph = _graph(root)
-    tex = render_mod.document(graph, clean=clean, audit=audit, title=title)
+    tex = render_mod.document(
+        graph, clean=clean, audit=audit, title=title,
+        preamble=ops.read_preamble(project),
+    )
     if to_stdout:
         sys.stdout.write(tex)
         return
@@ -412,6 +415,24 @@ def new(
         target=target,
         parent=parent,
     )
+
+
+@app.command()
+def preamble(
+    file: Optional[Path] = typer.Option(None, "--from", help="replace it with this file"),
+    root: Optional[Path] = typer.Option(None, "--root"),
+) -> None:
+    """Show, or replace, the project's LaTeX preamble (preamble.tex).
+
+    Macros defined here are injected into the rendered document, shown to every
+    agent as context, and used by the browser to typeset your notation.
+    """
+    project = _project(root)
+    if file is None:
+        text = ops.read_preamble(project)
+        console.print(Text(text) if text else "[dim]no preamble.tex in this project[/]")
+        return
+    _run_op(ops.set_preamble, project, file.expanduser().read_text(encoding="utf-8"))
 
 
 @app.command()

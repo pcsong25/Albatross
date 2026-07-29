@@ -665,6 +665,34 @@ def unarchive(project: Project, node_id: str, actor: str = "human") -> Result:
 
 
 @serialised
+def set_preamble(project: Project, text: str, actor: str = "human") -> Result:
+    """Write the project preamble.
+
+    Not a node mutation, but a project one, and it changes how every statement
+    reads — so it goes through ops and lands in the event log like anything else.
+    """
+    from .load import atomic_write
+
+    path = project.preamble_path
+    before = path.read_text(encoding="utf-8") if path.exists() else ""
+    atomic_write(path, text if text.endswith("\n") or not text else text + "\n")
+    graph = open_graph(project)
+    return _finish(
+        project,
+        graph,
+        None,
+        "set_preamble",
+        {"chars_before": len(before), "chars_after": len(text)},
+        actor=actor,
+    )
+
+
+def read_preamble(project: Project) -> str:
+    path = project.preamble_path
+    return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
+@serialised
 def sweep_only(project: Project) -> tuple[Graph, list[str]]:
     """Re-derive and persist without changing anything authored."""
     graph = open_graph(project)

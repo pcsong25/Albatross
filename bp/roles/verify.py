@@ -244,6 +244,7 @@ def verify_proof(
 
     system = context.load_prompt("verify_proof")
     user = context.join(
+        context.preamble_block(project),
         context.node_block(node, heading="The claim and its proof"),
         context.children_block(graph, node)
         or "## The lemmas this proof cites\n\nNone — this is a leaf.",
