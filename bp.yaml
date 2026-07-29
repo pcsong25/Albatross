@@ -1,8 +1,7 @@
 # bp.yaml — which model plays which role.
 #
 # The system never names a model in its code; it names a role. Change a line
-# here and the whole system uses a different model for that job. Nothing else
-# has to change.
+# here and the whole system uses a different model for that job.
 #
 # Backends:
 #   claude_api   metered Anthropic API   ANTHROPIC_API_KEY, or `ant auth login`
@@ -13,54 +12,91 @@
 #
 # `bp agents` prints this table and says which backends can actually run here.
 #
-# This machine has the `claude` and `codex` CLIs and no API key, so the roles
-# below use the subscription backends. To move to the metered API instead,
-# replace a line with e.g. `{backend: claude_api, model: claude-opus-5}` — the
-# API backends report tokens, so the dollar cap below starts to bite; with CLI
-# backends the call cap is the only thing that limits a run.
+# --- current setup: every role on GPT-5.6 Sol through the Codex CLI ----------
+#
+# `command` is spelled out per role because the effort level is a Codex config
+# override (`-c model_reasoning_effort=…`) rather than a flag the backend knows
+# about. That is exactly what `options.command` exists for: CLI flags drift, and
+# you should be able to follow that without editing Python.
+#
+# The effort ladder Codex accepts is:
+#     none · minimal · low · medium · high · xhigh · max
+# so `max` is the highest and `xhigh` the second. Higher effort costs *time*, not
+# money, on a subscription — but the time is real: a decomposition at `max` can
+# run half an hour, and a recompile makes twenty or more calls.
+#
+# ⚠️  ONE THING YOU ARE GIVING UP. `verifier_a` and `verifier_b` are meant to be
+# models from *different families* — that is the entire reason there are two of
+# them, because two verifiers trained by the same lab miss the same things. With
+# both on Sol the panel is two samples from one model, which is worth much less.
+# To get it back, change verifier_b to one line:
+#     verifier_b: {backend: claude_cli, model: opus, timeout: 1800}
+# or, with an ANTHROPIC_API_KEY:
+#     verifier_b: {backend: claude_api, model: claude-opus-5, timeout: 1800}
 
 agents:
   roles:
-    # Proposes decompositions. The most demanding role: it has to produce a
-    # reduction proof and a complete discharge table in one shot.
-    #
-    # `command` is spelled out because a Codex CLI signed in with a ChatGPT
-    # account rejects an explicit --model. This is why the command is
-    # configuration and not a constant in the Python.
+    # Proposes decompositions. The most demanding role in the system: it has to
+    # produce the children, a reduction proof, and a complete discharge table in
+    # one shot. It also runs least often, so it gets `max`.
     decomposer:
       backend: codex_cli
-      model: default
+      model: gpt-5.6-sol
       options:
-        command: [codex, exec, --skip-git-repo-check]
-      timeout: 900
+        command: [codex, exec, --skip-git-repo-check,
+                  --model, gpt-5.6-sol,
+                  -c, model_reasoning_effort=max]
+      timeout: 3600
 
     # Reads a decomposition back: does the reduction establish the parent, and
     # is any child secretly the parent again. Two separate calls.
-    checker: {backend: claude_cli, model: opus, timeout: 900}
+    checker:
+      backend: codex_cli
+      model: gpt-5.6-sol
+      options:
+        command: [codex, exec, --skip-git-repo-check,
+                  --model, gpt-5.6-sol,
+                  -c, model_reasoning_effort=xhigh]
+      timeout: 2400
 
-    # The verifier panel. These two are models from *different families* — that
-    # is the entire reason there are two of them. Two verifiers from the same
-    # lab miss the same things, and the second one costs as much either way.
-    verifier_a: {backend: claude_cli, model: opus, timeout: 900}
+    # The verifier panel. See the warning above: these should not be the same
+    # model. Both are on Sol only because that is what was asked for.
+    verifier_a:
+      backend: codex_cli
+      model: gpt-5.6-sol
+      options:
+        command: [codex, exec, --skip-git-repo-check,
+                  --model, gpt-5.6-sol,
+                  -c, model_reasoning_effort=xhigh]
+      timeout: 2400
     verifier_b:
       backend: codex_cli
-      model: default
+      model: gpt-5.6-sol
       options:
-        command: [codex, exec, --skip-git-repo-check]
-      timeout: 900
+        command: [codex, exec, --skip-git-repo-check,
+                  --model, gpt-5.6-sol,
+                  -c, model_reasoning_effort=xhigh]
+      timeout: 2400
 
     # Writes proofs for routine and standard leaves only. Never sets a status.
-    prover: {backend: claude_cli, model: sonnet, timeout: 900}
+    prover:
+      backend: codex_cli
+      model: gpt-5.6-sol
+      options:
+        command: [codex, exec, --skip-git-repo-check,
+                  --model, gpt-5.6-sol,
+                  -c, model_reasoning_effort=xhigh]
+      timeout: 2400
 
 budget:
   # A run stops before the call that would cross either cap. The dollar cap only
   # constrains calls whose price is known; a subscription CLI reports no price,
-  # so with the configuration above the call cap is the one that bites. Keep it
-  # set.
+  # so with this configuration the CALL CAP is the only thing limiting a run.
+  # Keep it set — at `max` effort, forty calls is a long afternoon.
   per_recompile_usd: 3.0
   max_calls_per_recompile: 40
 
-# Published list prices, US dollars per million tokens. Used for `--dry-run`
-# estimates and the budget cap. `bp` ships defaults for the current Claude
-# models; add an entry here for anything else, or to override a price.
+# Published list prices, US dollars per million tokens, for `--dry-run`
+# estimates. Subscription backends report no price, so nothing here applies to
+# the configuration above; add an entry if you move a role onto a metered API.
 pricing: {}
