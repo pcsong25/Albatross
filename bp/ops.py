@@ -16,6 +16,8 @@ consistent file and a missing log line, never the reverse.
 
 from __future__ import annotations
 
+import functools
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
@@ -45,6 +47,29 @@ from .model import (
 )
 from .paths import Project
 from .propagate import sweep
+
+
+#: Every mutation takes this. Writes are already atomic per file, but a
+#: mutation is *read the graph, change it, sweep, write the derived fields* —
+#: two of those interleaving would let one sweep persist values computed before
+#: the other's edit. The web interface runs role calls on a worker thread while
+#: the user edits, so this is a real ordering, not a hypothetical one.
+#:
+#: It is re-entrant (ops call other ops) and process-local. Two *processes* —
+#: a UI and a CLI at once — are still unguarded; see the locking row in
+#: UPGRADE.md.
+_LOCK = threading.RLock()
+
+
+def serialised(fn):
+    """Run this mutation to completion before another one starts."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _LOCK:
+            return fn(*args, **kwargs)
+
+    return wrapper
 
 
 class _Unset:
@@ -185,6 +210,7 @@ uses: {{}}
 """
 
 
+@serialised
 def add_node(
     project: Project,
     node_id: str,
@@ -253,6 +279,7 @@ def add_node(
 # --- body edits ---------------------------------------------------------------
 
 
+@serialised
 def _edit_section(
     project: Project,
     node_id: str,
@@ -284,6 +311,7 @@ def _edit_section(
     )
 
 
+@serialised
 def edit_statement(
     project: Project, node_id: str, tex: str, actor: str = "human"
 ) -> Result:
@@ -297,10 +325,12 @@ def edit_statement(
     return _edit_section(project, node_id, STATEMENT, tex, "edit_statement", actor)
 
 
+@serialised
 def edit_proof(project: Project, node_id: str, tex: str, actor: str = "human") -> Result:
     return _edit_section(project, node_id, PROOF, tex, "edit_proof", actor)
 
 
+@serialised
 def add_note(project: Project, node_id: str, text: str, actor: str = "human") -> Result:
     """Append a paragraph to Notes. Notes are fed to agents as context."""
     graph = open_graph(project)
@@ -320,6 +350,7 @@ def add_note(project: Project, node_id: str, text: str, actor: str = "human") ->
 # --- structure ---------------------------------------------------------------
 
 
+@serialised
 def set_children(
     project: Project, node_id: str, children: list[str], actor: str = "human"
 ) -> Result:
@@ -358,6 +389,7 @@ def set_children(
     )
 
 
+@serialised
 def set_uses(
     project: Project,
     node_id: str,
@@ -387,6 +419,7 @@ def set_uses(
     )
 
 
+@serialised
 def set_hypotheses(
     project: Project,
     node_id: str,
@@ -411,6 +444,7 @@ def set_hypotheses(
     )
 
 
+@serialised
 def set_strategy(
     project: Project, node_id: str, strategy: str | None, actor: str = "human"
 ) -> Result:
@@ -432,6 +466,7 @@ def set_strategy(
     )
 
 
+@serialised
 def relabel(
     project: Project, node_id: str, difficulty: str, actor: str = "human"
 ) -> Result:
@@ -457,6 +492,7 @@ def relabel(
 # --- status ------------------------------------------------------------------
 
 
+@serialised
 def _set_status(
     project: Project,
     node_id: str,
@@ -492,6 +528,7 @@ def set_assumption(
     return _set_status(project, node_id, "assumption", reason, "set_assumption", actor)
 
 
+@serialised
 def record_verification(
     project: Project,
     node_id: str,
@@ -538,6 +575,7 @@ def record_verification(
 # --- archival ----------------------------------------------------------------
 
 
+@serialised
 def archive(
     project: Project, node_id: str, cascade: bool = True, actor: str = "human"
 ) -> Result:
@@ -604,6 +642,7 @@ def archive(
     )
 
 
+@serialised
 def unarchive(project: Project, node_id: str, actor: str = "human") -> Result:
     graph = open_graph(project)
     node = graph.get(node_id)
@@ -614,6 +653,7 @@ def unarchive(project: Project, node_id: str, actor: str = "human") -> Result:
     return _finish(project, graph, node, "unarchive", {}, actor=actor)
 
 
+@serialised
 def sweep_only(project: Project) -> tuple[Graph, list[str]]:
     """Re-derive and persist without changing anything authored."""
     graph = open_graph(project)
