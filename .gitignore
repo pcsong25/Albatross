@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Derived output. The LaTeX document is regenerated from the node files on
+# demand and is never the source of truth, so it does not belong in history.
+.bp/build/
+
+# Everything else under .bp/ — events.jsonl, and the agent call log once L1
+# lands — is history and IS tracked.
+
+.DS_Store

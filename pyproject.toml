@@ -1,0 +1,39 @@
+[project]
+name = "albatross-bp"
+version = "0.1.0"
+description = "Albatross / Blueprint v0 — an interactive proof-decomposition assistant"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2",
+    "python-frontmatter",
+    "ruamel.yaml",
+    "networkx",
+    "jinja2",
+    "typer",
+    "rich",
+    "fastapi",
+    "uvicorn",
+    "watchfiles",
+    "anthropic",
+    "openai",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+bp = "bp.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["bp*"]
+
+[tool.setuptools.package-data]
+bp = ["templates/*.j2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
