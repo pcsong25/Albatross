@@ -146,7 +146,7 @@ def show(
     )
     console.print(f"  statement_hash={node.statement_hash}  stale={node.stale}")
     if node.status_reason:
-        console.print(f"  reason: {node.status_reason}")
+        console.print(Text(f"  reason: {node.status_reason}"))
     if node.support:
         console.print(f"  rests on: {', '.join(node.support)}")
     if node.blocked_by:
@@ -159,19 +159,19 @@ def show(
     if node.hypotheses:
         console.print("  hypotheses:")
         for h in node.hypotheses:
-            console.print(f"    {h.id}: {h.tex}")
+            console.print(Text(f"    {h.id}: {h.tex}"))
     if node.uses:
         console.print("  uses:")
         for cid, use in node.uses.items():
-            console.print(f"    {cid} applied to {use.applied_to or '-'}")
+            console.print(Text(f"    {cid} applied to {use.applied_to or '-'}"))
             for hid, src in sorted(use.discharges.items()):
-                console.print(f"      {hid} <- {src}")
+                console.print(Text(f"      {hid} <- {src}"))
     for section in ("Statement", "Proof", "Notes"):
         text = node.section(section)
         if text.strip():
             console.print()
             console.print(Text(section, style="bold"))
-            console.print(text)
+            console.print(Text(text))
 
 
 @app.command("graph")
@@ -227,7 +227,7 @@ def why(
             err_console.print("[bold red]error[/] no target node; name one explicitly")
             raise typer.Exit(code=2)
         node_id = target.id
-    console.print(why_mod.text(graph, node_id))
+    console.print(Text(why_mod.text(graph, node_id)))
 
 
 @app.command()
@@ -251,10 +251,13 @@ def check(
             console.print(
                 Text(where, style="bold"),
                 Text(f"{d.severity}[{d.code}]", style=SEVERITY_STYLE[d.severity]),
-                d.message,
+                Text(d.message),
             )
             if d.hint and not quiet:
                 console.print(Text(f"    hint: {d.hint}", style="dim"))
+                # Everything a user or an agent writes is LaTeX. `rich` would read
+                # `\[` as an escaped bracket and `[dim]` as a style tag, so node
+                # text and diagnostic messages are printed as Text, never as markup.
         console.print()
         console.print(
             f"{len(report.errors)} error(s), {len(report.warnings)} warning(s), "
@@ -395,6 +398,14 @@ def archive(
 ) -> None:
     """Archive a node. Never deletes: the file stays, `lifecycle` changes."""
     _run_op(ops.archive, _project(root), node_id, not keep_descendants)
+
+
+# --- L1: the agent commands ---------------------------------------------------
+# Registered from a separate module so that everything above stays runnable with
+# no key, no network and no configuration.
+from . import cli_agents  # noqa: E402
+
+cli_agents.register(app)
 
 
 def main() -> None:  # pragma: no cover - console-script entry point

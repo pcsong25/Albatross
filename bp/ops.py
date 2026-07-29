@@ -411,6 +411,27 @@ def set_hypotheses(
     )
 
 
+def set_strategy(
+    project: Project, node_id: str, strategy: str | None, actor: str = "human"
+) -> Result:
+    """Set the free-text strategy hint. Fed to the decomposer on later attempts."""
+    graph = open_graph(project)
+    node = graph.get(node_id)
+    if node is None:
+        raise OpError(f"no node {node_id!r}")
+    before = node.strategy
+    set_authored(node, "strategy", strategy or None)
+    write_node(node)
+    return _finish(
+        project,
+        graph,
+        node,
+        "set_strategy",
+        {"before": before, "after": strategy},
+        actor=actor,
+    )
+
+
 def relabel(
     project: Project, node_id: str, difficulty: str, actor: str = "human"
 ) -> Result:
