@@ -683,3 +683,58 @@ reload.
 **Alternatives.** Double-click to fold (invisible, undiscoverable) or a fold
 button in the detail panel (works, but then it is not on the node, and the point
 is to prune the picture while looking at the picture).
+
+---
+
+## D036 — `bp init` and `bp new`, because a guide should not begin "hand-write this YAML"
+
+**Date** 2026-07-29 · **Milestone** L2 (follow-up)
+
+Writing the usage guide surfaced it: there was no way to *start* a project. Every
+command needs a `nodes/` directory with something in it, and the only way to get
+the first node was to hand-author frontmatter with exact field names. The web
+interface could not help either — "Add child" needs a node to hang the child on.
+
+**Decision.** `bp init <dir> --id <node-id>` makes `nodes/`, writes the target
+node and copies `bp.yaml`; `bp new <id> [--parent P]` creates one by hand. Both
+are thin wrappers over `ops.add_node`, so nothing new can be written to a node
+file by a path that does not go through `ops`.
+
+**Also added, for the same reason:** `bp frontier`, so the ranked queue is
+reachable from the terminal and not only from the browser.
+
+---
+
+## D037 — Attaching a child creates its row in the discharge table
+
+**Date** 2026-07-29 · **Milestone** L2 (follow-up)
+
+Adding a child by hand — from the CLI or the interface's Add child — produced a
+`DIS010` immediately: *"child X is cited but has no `uses` entry"*. The user had
+not made a mistake; the system had.
+
+**Decision.** `ops.add_node(parent=…)` gives the new child an empty `uses` row.
+For a fresh child with no hypotheses that row is complete and no diagnostic
+fires. As soon as the child gains hypotheses, `DIS011` names them one at a time,
+which is the useful message.
+
+---
+
+## D038 — The discharge table is editable from the browser
+
+**Date** 2026-07-29 · **Milestone** L2 (follow-up)
+
+The L2 acceptance session added a child through the interface and produced a
+`DIS010` that **could not be fixed from the interface** — the discharge table was
+read-only, so the only repair was a text editor. That contradicts the milestone's
+own criterion of running a full session from the browser alone.
+
+**Decision.** `POST /api/node/{id}/uses` (wrapping `ops.set_uses`, which already
+existed) and an edit dialog that generates one input per hypothesis of each cited
+lemma.
+
+**Why generated from the children's hypotheses rather than a free-form editor.**
+The rows you are asked to fill in are then exactly the rows the discharge check
+will ask about, and there is no way to leave one out by forgetting it exists.
+That is the same argument as requiring the decomposer to return a complete
+table — the form is the anti-gap device, not the diligence of whoever fills it in.
