@@ -50,6 +50,11 @@ class Job:
     id: str
     kind: str
     node: str | None
+    #: Every node this job may write to. For a single-node role call that is
+    #: just ``node``; a recompile fills it from its plan, so the interface can
+    #: disable the buttons for exactly the nodes it will touch and leave the
+    #: rest live.
+    nodes: list[str] = field(default_factory=list)
     status: str = QUEUED
     #: What is happening right now, named so the user can see which agent is
     #: working rather than watching an anonymous spinner.
@@ -65,6 +70,7 @@ class Job:
             "id": self.id,
             "kind": self.kind,
             "node": self.node,
+            "nodes": self.nodes,
             "status": self.status,
             "step": self.step,
             "calls": self.calls,
@@ -98,7 +104,12 @@ class JobRunner:
         return [j for j in self.all() if j.status in (QUEUED, RUNNING)]
 
     def busy_nodes(self) -> set[str]:
-        return {j.node for j in self.active if j.node}
+        out: set[str] = set()
+        for job in self.active:
+            if job.node:
+                out.add(job.node)
+            out.update(job.nodes)
+        return out
 
     # --- running -------------------------------------------------------------
 
@@ -107,8 +118,9 @@ class JobRunner:
         kind: str,
         node: str | None,
         work: Callable[["Job"], Any],
+        nodes: list[str] | None = None,
     ) -> Job:
-        job = Job(id=uuid.uuid4().hex[:10], kind=kind, node=node)
+        job = Job(id=uuid.uuid4().hex[:10], kind=kind, node=node, nodes=list(nodes or []))
         with self._lock:
             self._jobs[job.id] = job
             while len(self._jobs) > KEEP:

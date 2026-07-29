@@ -545,7 +545,15 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
                 "stopped": result.stopped,
             }
 
-        return runner.submit("recompile", None, work).as_dict()
+        # Claim the nodes the plan names, so the interface disables their
+        # buttons for the duration and leaves every other node live. Not wrapped
+        # in a try: if planning fails the job would fail the same way, and
+        # swallowing it here once cost an afternoon by hiding a TypeError.
+        planned = [
+            t.node
+            for t in recompile_mod.plan(project, only=list(body.nodes) or None).tasks
+        ]
+        return runner.submit("recompile", None, work, nodes=planned).as_dict()
 
     @app.post("/api/jobs/resume")
     def api_resume() -> dict[str, Any]:
