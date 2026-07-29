@@ -325,3 +325,236 @@ the Python 3.14 that was installed. Every dependency installs and imports
 cleanly, and nothing in the code uses a feature newer than 3.12.
 
 **To reverse.** Create the virtualenv from a 3.12 interpreter; no code changes.
+
+---
+
+## D017 — Prompt files are the *system* prompt; the user message is assembled by code
+
+**Date** 2026-07-29 · **Milestone** L1
+
+The brief requires each role's prompt to live in a separate `prompts/*.md` file
+"so the user can edit prompts without touching code", without saying what the
+file contains.
+
+**Decision.** Each file is the **system** prompt: the instructions, the standards
+of a good decomposition, what counts as a finding. The **user** message is built
+from the graph by `bp/roles/context.py`.
+
+**Why.** The instruction wording is where most of the quality lives and is what a
+mathematician will want to iterate on — that belongs in a file they can open.
+Which node's statement, hypotheses and ancestors get sent is data assembly, not
+prose; putting it in a file to be hand-edited would invite the two to drift and
+make a prompt file unable to say what it was actually asked about.
+
+---
+
+## D018 — The JSON schema instruction is appended by the agent layer, not written in the prompt files
+
+**Date** 2026-07-29 · **Milestone** L1
+
+**Decision.** `Backend.complete` appends the pydantic model's JSON Schema and the
+"double every LaTeX backslash" warning to every user prompt. The prompt files
+never mention JSON.
+
+**Why.** The prompt files are meant to be edited by someone thinking about
+mathematics. The JSON contract is machinery, and an accidental edit to it breaks
+every call from that role in a way that looks like a model failure. Keeping it
+out of reach is the point.
+
+**To reverse.** Move `schema_instruction` into each prompt file and stop
+appending; every prompt then has to be kept in sync with its schema by hand.
+
+---
+
+## D019 — A JSON parse failure gets one mechanical repair before the retry
+
+**Date** 2026-07-29 · **Milestone** L1
+
+**Decision.** If a reply will not parse, backslashes that JSON does not recognise
+as escapes are doubled and the parse is retried once. Whether that happened is
+recorded on the call as `repaired_json`.
+
+**Why.** Every string this system moves through a model is LaTeX, and a model
+asked for JSON containing `\omega` very often writes a single backslash, which is
+not legal JSON. Throwing the whole answer away and paying for a retry when the
+content is fine and only the escaping is wrong is waste.
+
+**The known limitation, stated in the code.** `\nabla` *is* legal JSON — `\n`
+followed by `abla` — so a strict parse succeeds and silently yields a newline.
+The repair cannot help there. That is why the schema instruction asks for doubled
+backslashes: the repair is the safety net, not the plan.
+
+---
+
+## D020 — A decomposition that still fails after two repairs is written anyway
+
+**Date** 2026-07-29 · **Milestone** L1
+
+The brief says to allow two repair rounds "before surfacing to the user" without
+saying whether the failing decomposition is written.
+
+**Decision.** Write it, and report the remaining diagnostics. `bp expand` exits
+non-zero when it does.
+
+**Why.** It matches what the rest of the system does with debt: the shipped
+fixture has a `DIS011` committed to it on purpose. `bp check` says exactly what
+is wrong, `bp why` explains what it blocks, the renderer marks it, and nothing is
+destroyed if the user archives it. Discarding a decomposition that is 90% right
+because one hypothesis has no source would throw away the useful part and leave
+the user nothing to edit.
+
+**Alternative.** Refuse and return only the diagnostics. Reasonable, and one line
+to change (`apply=False` in `expand`) if the user finds the graph accumulating
+junk.
+
+---
+
+## D021 — Child ids are `<project prefix>.<slug>`, de-duplicated with a numeric suffix
+
+**Date** 2026-07-29 · **Milestone** L1
+
+**Decision.** The model proposes a short kebab-case slug with no prefix. The
+prefix is the first dotted component of the parent's id, so a child of
+`gclm.blowup` becomes `gclm.riccati-bound`. A collision with an existing id gets
+`-2`, `-3`, …
+
+**Why.** Ids are the system's stable keys and appear in citations, hashes, the
+event log and every discharge table; letting a model choose them freely would
+produce collisions and ever-lengthening paths (`gclm.blowup.energy.lower.bound`).
+Deriving the prefix keeps a project's ids in one namespace without asking the
+model to know what the namespace is.
+
+---
+
+## D022 — Silence from the whole verifier panel is not agreement
+
+**Date** 2026-07-29 · **Milestone** L1
+
+Found while testing: `BudgetExceeded` subclasses `AgentError`, and the panel's
+"one verifier failing is survivable" `except AgentError: continue` was catching
+it. A recompile sailed straight past its call cap, and — worse — a node whose
+verifiers had *all* failed was being recorded as `verified`, because no
+objections had been collected.
+
+**Decision.** Two changes. `BudgetExceeded` and `ReplayMiss` are re-raised rather
+than caught. And `verify` counts how many panel members actually answered; if
+none did, it refuses to record a verdict and raises.
+
+**Why.** A network outage, an expired subscription or an exhausted budget would
+otherwise turn into a green graph — the exact failure the whole system exists to
+prevent, arriving through the back door. One panel member failing is survivable
+and shows up as its absence from `checked`; both failing is not.
+
+---
+
+## D023 — Verifier results are cached on the obligation hash, in `.bp/verify/obligations.json`
+
+**Date** 2026-07-29 · **Milestone** L1
+
+**Decision.** One JSON file mapping obligation hash to verdict. Written after
+each node's obligations are checked.
+
+**Why.** The brief requires caching on the hash. A single file is enough at this
+scale, is readable, and diffs sensibly; one file per hash (as the call log does)
+would be tidier at ten thousand obligations and is a trivial change if it ever
+matters.
+
+**Note.** The cache is keyed on what the obligation *asks*, normalised for
+whitespace — not on where it sits. That is what makes editing one paragraph of a
+proof leave the other obligations as cache hits.
+
+---
+
+## D024 — `ADMITTED` discharges are not sent to the verifier
+
+**Date** 2026-07-29 · **Milestone** L1
+
+**Decision.** Obligation records for `ADMITTED` sources carry `kind: "admitted"`
+and are skipped by the verifier and by the recompile estimate.
+
+**Why.** There is nothing to ask. The author has already said this hypothesis has
+no source, the sweep's admitted clamp has already put the node into its own
+support set, and the certificate already prints it. Paying a model to confirm a
+stated absence is pure cost.
+
+---
+
+## D025 — A backend's command vector is configuration, not a constant
+
+**Date** 2026-07-29 · **Milestone** L1
+
+**Decision.** `claude_cli` and `codex_cli` ship a default argv, overridable per
+role in `bp.yaml` under `options.command`.
+
+**Why.** This was not hypothetical. `codex exec` refuses to run outside a trusted
+directory without `--skip-git-repo-check`, and a Codex CLI signed in with a
+ChatGPT account rejects an explicit `--model` outright. CLI flags drift between
+releases, and the user should be able to follow that drift by editing one line of
+YAML rather than opening a `.py` file.
+
+---
+
+## D026 — The shipped `bp.yaml` uses the subscription CLI backends
+
+**Date** 2026-07-29 · **Milestone** L1
+
+**Decision.** The committed configuration points every role at `claude_cli` or
+`codex_cli`. The code's built-in defaults (used when `bp.yaml` is absent) point
+at `claude_api` with `claude-opus-5`.
+
+**Why.** This machine has the `claude` and `codex` CLIs and no API key, so the
+CLI backends are what actually runs here, and a shipped configuration that cannot
+run is worse than none. The comments in the file say exactly what to change to
+move to the metered API. Note the consequence, which the file also states: with
+subscription backends the dollar cap can never fire, so the **call cap** is the
+only thing limiting a run.
+
+---
+
+## D027 — L1's commands live in `bp/cli_agents.py`, not in `bp/cli.py`
+
+**Date** 2026-07-29 · **Milestone** L1
+
+**Decision.** A separate module, registered onto the same `typer` app.
+
+**Why.** Everything in `bp/cli.py` runs with no key, no network and no
+configuration, and that property is worth being able to see at a glance. The
+agent commands fail for a whole additional class of reasons and report in those
+terms. The split is also what lets the L0 acceptance still be run in isolation.
+
+---
+
+## D028 — Recompile selects stale and unverified-with-proof nodes only
+
+**Date** 2026-07-29 · **Milestone** L1
+
+**Decision.** Exactly what the brief says: `blocked:stale` and
+`blocked:unverified`. Not `open` nodes (nothing to verify), not `blocked:children`
+(the reduction is already verified; the problem is underneath), not
+`proved_modulo`.
+
+Ordering is by distance from the target, shallow first, then everything else
+alphabetically — so a partial run leaves the user closer to knowing about their
+theorem rather than about an unrelated branch.
+
+**Also decided:** the `--dry-run` estimate excludes confirmation calls and *says
+so* in the output. They happen only for objections, and how many there will be is
+not knowable in advance. Inventing a number would make the estimate look more
+precise than it is; omitting it silently would make it look cheaper.
+
+---
+
+## D029 — The scripted backend ships in the package, not in the tests
+
+**Date** 2026-07-29 · **Milestone** L1
+
+**Decision.** `bp/agents/scripted.py` is a registered backend named `scripted`.
+
+**Why.** It lets a test project's configuration point a role at canned replies
+without the role code special-casing anything, which means the tests exercise the
+real path — registry resolution, schema validation, retry, budget — rather than a
+parallel one. It is never a default and has to be named explicitly, so a real run
+cannot reach it by accident.
+
+**Alternative.** A test-only fixture that monkey-patches `Backend.invoke`.
+Rejected: it would bypass the registry, which is exactly the layer worth testing.

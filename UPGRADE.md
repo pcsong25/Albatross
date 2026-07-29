@@ -70,7 +70,8 @@ and v0's code ignores.
 
 ## Agents and decomposition
 
-Everything in this section presumes L1 exists.
+L1 exists, so everything in this section is now an increment on working code
+rather than a prerequisite.
 
 | Feature | `DESIGN.md` | Touches | Effort | Signal |
 |---|---|---|---|---|
@@ -89,8 +90,10 @@ Everything in this section presumes L1 exists.
 | Feature | `DESIGN.md` | Touches | Effort | Signal |
 |---|---|---|---|---|
 | **State as a fold over the event log** — time travel, blame, branching | §6 | `bp/events.py` gains a reducer; `ops.py` writes events first and derives files from them | 1–2 weeks | You want to branch a decomposition, or to answer "what did this node look like last Tuesday". The log is already append-only and honest, so this is additive. |
-| **Recompile tiers T0–T4 with cost estimation** | §9 | `bp/recompile.py` (L1) | included in L1 | — |
-| **Locking and checkpointing for concurrent runs** | §11 | `bp/locking.py` (does not exist) | 2 days | Two `bp` processes, or the UI and a CLI, write at once and corrupt a file. Atomic writes make this unlikely but not impossible. |
+| **Recompile tiers T0–T3** | §9 | `bp/recompile.py` | 2 days | v0's recompile is the model tier only: it selects nodes and verifies them. The cheap tiers (parse, deterministic checks, sweep) exist but are not wired into it as a gate that runs *below* the agents. The signal is paying for a verification of a node that `bp check` would have rejected for free. |
+| **Watch mode** — run the deterministic tiers on file save | §9 "Watch mode" | new `bp/watch.py`; `watchfiles` is already a dependency | 1 day | You are editing LaTeX and running `bp check` by hand after every save. This is the Lean-in-an-editor interaction shape and it is cheap; it was left out of L1 only because L2's UI may subsume it. |
+| **Locking and checkpointing for concurrent runs** | §11 | `bp/locking.py` (does not exist) | 2 days | **Sharpened by L1.** Two `bp` processes, or the L2 UI and a CLI, write at once. Atomic writes make a corrupt *file* unlikely, but two concurrent recompiles will both write the obligation cache and the last one wins, silently discarding the other's paid results. The signal is running the UI and the CLI at the same time — which L2 makes easy. |
+| **Race safety on verification results** — write each result with the signature it was computed against, discard results whose signature has moved | §9 "Race safety" | `bp/roles/verify.py` | half a day | A long verification finishes after the user has edited the statement. Today the certificate is written against the *current* hashes, so a verification of the old text can be recorded as current. Staleness catches the common case, but not this one. |
 | **Lean-lite** — one Lean file per node, unproved leaves as axioms, the reduction as a theorem | §17 | separate `lean/` directory, `formalized` flag | 2+ weeks | You want machine-checked reductions. Fully parallel to everything else; abandoning it costs nothing. |
 
 ---

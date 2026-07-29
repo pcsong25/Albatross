@@ -1,8 +1,13 @@
 # ARCHITECTURE.md — what Albatross currently is
 
-Written for someone who has never seen the code. Current as of **L0**: the
-deterministic core. Nothing here calls a model, and there is no web interface
-yet; both arrive in L1 and L2.
+Written for someone who has never seen the code. Current as of **L1**: the
+deterministic core plus the agent layer. There is no web interface yet; that is
+L2.
+
+Sections 1–11 are the deterministic core. Nothing in them calls a model, and all
+of it runs with no key, no network and no configuration. Sections 12–14 are the
+agent layer. Everything there is built *on top of* the core and never around it:
+an agent proposes, the core checks, and the core decides what the graph says.
 
 ---
 
@@ -48,6 +53,18 @@ nodes/*.md
     ├── bp/why.py        the derived fields, as English
     ├── bp/render.py     the derived fields, as a LaTeX document
     └── bp/load.py       persist_computed writes them back into the files
+```
+
+The agent layer sits on top and only ever writes through `ops`:
+
+```
+bp/roles/context.py   assemble context from the graph, deterministically
+    ▼
+bp/agents/            one model call: JSON, validated, retried once, logged
+    ▼
+bp/roles/*.py         run the deterministic checks on what came back
+    ▼
+bp/ops.py             write it — and the sweep decides what the graph now says
 ```
 
 Reading commands (`check`, `status`, `why`, `graph`, `show`, `render`,
@@ -482,6 +499,10 @@ In v0 this is a testing scaffold. The intended daily interface is the L2 web UI.
 
 | Command | Does |
 |---|---|
+**The deterministic core** — no key, no network, no configuration:
+
+| Command | Does |
+|---|---|
 | `bp status` | One line per node: role, local status, global status, what it rests on |
 | `bp show <id>` | Everything about one node, including its discharge table |
 | `bp graph` | The DAG as a tree, rooted at the target |
@@ -494,26 +515,266 @@ In v0 this is a testing scaffold. The intended daily interface is the L2 web UI.
 | `bp admit <id> -r "…"` / `bp assume <id> -r "…"` | Mark, with a required reason |
 | `bp note <id> "…"` / `bp relabel <id> <difficulty>` / `bp archive <id>` | |
 
+**The agent layer** — these call models, and can fail for reasons the ones above
+cannot: a missing credential, a budget cap, a model that would not answer.
+
+| Command | Does |
+|---|---|
+| `bp agents` | Which model plays which role, and whether it can run here |
+| `bp expand <id> [--hint "…"]` | Decompose one level, repairing against the discharge check |
+| `bp redo <id> [--hint "…"]` | Archive the subtree to `attempts/`, decompose again |
+| `bp check-decomp <id>` | The two checker calls |
+| `bp verify <id> [--no-record]` | Obligations, whole proof, confirmation |
+| `bp prove <id> [--force]` | Write a proof for a routine or standard leaf |
+| `bp recompile [--dry-run] [--node id]` | Verify every stale and unverified node |
+| `bp resume [job_id]` | Continue an interrupted recompile |
+| `bp jobs` / `bp calls [--show hash]` | Job records; the model call log |
+
+Every one of them takes `--replay`, which resolves calls from the log instead of
+the network.
+
 `--root` overrides project discovery, which otherwise walks up from the working
 directory looking for `nodes/`, the way `git` finds its repository.
 `$BP_ROOT` also works.
 
 ---
 
-## 12. Not built yet
+## 12. The agent layer
 
-**L1 — agents.** `bp/agents/` with role-based indirection over both subscription
-CLI tools and metered APIs, configured in `bp.yaml` rather than hardcoded; the
-decomposer, checker, verifier and prover roles, each with its prompt in an
-editable `prompts/*.md`; `bp recompile` with `--dry-run`, budget caps, job
-records and `bp resume`; a call log supporting `--replay` so tests are free and
-the user can work offline. `LIGHT.md` "Agent layer" is the specification.
+Every model call in the system goes through `bp/agents/`. Nothing else may
+import an SDK or shell out to a model, and that rule is what makes the call log
+complete, the budget enforceable, and `--replay` able to reproduce a session
+offline.
+
+### Roles, not models
+
+The system talks about *roles* — `decomposer`, `checker`, `verifier_a`,
+`verifier_b`, `prover` — and never about models. Which model plays which role is
+one edit to `bp.yaml`:
+
+```yaml
+agents:
+  roles:
+    decomposer: {backend: codex_cli,  model: default}
+    checker:    {backend: claude_cli, model: opus}
+    verifier_a: {backend: claude_cli, model: opus}
+    verifier_b: {backend: openai_api, model: gpt-5.6}
+    prover:     {backend: claude_cli, model: sonnet}
+budget:
+  per_recompile_usd: 3.0
+  max_calls_per_recompile: 40
+```
+
+That indirection costs a layer and earns two things. It lets the expensive
+verifier move onto a subscription CLI when the bill gets uncomfortable. And it
+lets the two panel verifiers be put on **different model families**, which is the
+whole reason there are two of them — two verifiers from the same lab miss the
+same things.
+
+### Backends
+
+| Backend | What it is | Reports cost |
+|---|---|---|
+| `claude_api` | Metered Anthropic API. Streams; adaptive thinking; `output_config.effort`. | yes |
+| `openai_api` | Metered OpenAI API, Chat Completions. | yes |
+| `claude_cli` | `claude -p`, a flat-fee subscription | **no** |
+| `codex_cli` | `codex exec`, a flat-fee subscription | **no** |
+| `scripted` | Canned replies. Tests only; never a default. | no |
+
+CLI backends write the prompt to a temp file and feed it on stdin (a
+decomposition prompt exceeds the argv limit, and a prompt truncated by the shell
+fails in a way that looks like a model error), run in their own process group,
+and kill the **group** on timeout — a CLI tool spawns children, and killing only
+the parent leaves them holding the terminal. Their command vector is
+configurable per role in `bp.yaml`, because CLI flags drift between releases and
+the user should not have to edit Python to keep up.
+
+### One method
+
+```python
+Backend.complete(system, user, schema, timeout) -> (model, CallMeta)
+```
+
+Everything above `invoke` is shared, so all backends behave identically:
+
+- The JSON schema is appended to the user prompt automatically, along with an
+  instruction to double backslashes. It is deliberately **not** in the prompt
+  files — those are about mathematics and the user is expected to edit them; the
+  JSON contract is machinery they should not be able to break by accident.
+- The reply is dug out of whatever preamble wrapped it: fenced block, whole text,
+  then an outermost balanced `{…}` scan that understands string literals.
+- A reply that will not parse as JSON gets one repair attempt: backslashes that
+  JSON rejects are doubled. Every string this system moves is LaTeX, and a model
+  asked for JSON containing `\omega` very often emits a single backslash. The
+  repair is a safety net, recorded on the call; the schema instruction is the plan.
+- The result is validated against the pydantic schema. On failure it is sent back
+  **once**, with the validation error appended. On a second failure the task
+  **fails**. It never guesses — silently patching up a malformed decomposition
+  would put unchecked structure into the graph.
+
+### Cost, and the fact that it is sometimes unknown
+
+API backends report tokens and are priced from a table in `bp.yaml` (`bp` ships
+current list prices). Subscription backends report **nothing**, and say so:
+`cost_usd is None`, wall time recorded instead.
+
+So budget logic never assumes a price exists. `Budget` holds a dollar cap *and* a
+call cap; the dollar cap only constrains priced calls, which makes the **call cap
+the one that always works** — with a CLI backend it is the only thing between a
+repair loop and an afternoon of unattended work. `Budget.check()` runs *before*
+each call, so a run stops before the call that would cross the cap rather than
+after.
+
+### The call log, and `--replay`
+
+Every call is written to `.bp/agent/<prompt_hash>.json` with its full prompt and
+full response. `--replay` resolves calls from there instead of the network. A
+replay miss is a **loud error**, never a quiet fallback: a replay run that
+silently went online would stop being either reproducible or free, and would do
+so without saying so.
+
+The hash covers backend, model, system and user, so two models asked the same
+question do not collide.
+
+---
+
+## 13. The four roles
+
+Each role assembles context deterministically (`bp/roles/context.py` — no model
+decides what a model gets to see), asks for JSON, runs the deterministic checks
+on what came back, and writes through `ops`. The prompts live in
+`bp/roles/prompts/*.md` and are meant to be edited.
+
+### Decomposer
+
+One level. 3–7 children, each a section or a major lemma. The prompt says
+explicitly that the leaves are *expected* to be hard and unproved and that it
+must not attempt provable granularity — without that it goes four levels deep in
+one call and the user spends the afternoon pruning.
+
+Returns, per child: statement, difficulty, and an explicit `hypotheses` list.
+Plus a reduction proof for the parent **and a complete `uses` table**.
+
+That table is the load-bearing part, and it is not a judgement. A model cannot
+fill in `discharges` for every hypothesis of every lemma it cites without
+confronting whether those lemmas actually cover the parent. So the decomposition
+is assembled into a **candidate graph in memory**, the discharge check and the
+children-used check are run on it, and only then is anything written. Expect a
+substantial fraction of first attempts to be rejected: that is the mechanism
+working. The diagnostics are fed back verbatim — `DIS011`, the hypothesis id, the
+hint — and two repair rounds are allowed.
+
+After two failed repairs it is written anyway, with the remaining diagnostics
+reported. That is deliberate: this system's posture is that debt is visible
+rather than hidden, `bp check` says exactly what is wrong, and nothing is
+destroyed if the user archives it.
+
+`bp redo` copies the current subtree to `attempts/<node>-<n>/` **before**
+archiving anything, then archives the children and decomposes again with the
+previous attempt's problems as negative context.
+
+### Checker
+
+Two **separate** calls, with no shared context, so a problem in the reduction
+cannot colour the judgement about triviality:
+
+1. *Assuming every child is true, does the reduction establish the parent?*
+2. *Is any child a restatement of the parent, or as hard as the parent?*
+
+Each returns located problems or an explicit "none found, having checked the
+following" — the `checked` list is required either way, because a reviewer that
+can pass anything by saying nothing will pass bad proofs.
+
+The third question an earlier design asked — *are the needed hypotheses
+available?* — is deliberately **not** asked here. It already has a better answer:
+completeness from `bp/discharge.py`, deterministically; entailment from the
+verifier, one narrow obligation at a time.
+
+### Verifier
+
+Two jobs, kept apart.
+
+*Obligation checking.* Consume the obligation list one record at a time: does
+this source give this hypothesis, for this object? No proof search, no strategy,
+no whole-proof context. Narrow questions are where model judgement is most
+reliable, and the list is complete by construction. Results are cached on the
+obligation hash in `.bp/verify/obligations.json`, so editing one paragraph of a
+proof does not re-bill the rest. `ADMITTED` discharges are not sent at all —
+they are already visible debt.
+
+*Whole-proof pass.* Statement, proof, and the children's statements **as
+assumptions**. Two backends, different families, no shared context.
+
+Then a **confirmation pass** over every objection from either job: it is
+re-presented with surrounding context and dropped if the flaw dissolves. This is
+not optional. Without it the output is mostly pedantry, the user stops reading
+it, and the real objection goes with the rest. Withdrawn objections become notes
+on the node rather than disappearing.
+
+Two failure modes are handled explicitly, because both would be silent:
+
+- Running out of budget is **not** a verifier declining to object, so
+  `BudgetExceeded` is re-raised rather than caught by the panel's fault
+  tolerance.
+- If **no** panel member answered, `verify` refuses to record a verdict at all.
+  Silence from every verifier is not agreement, and recording `verified` there
+  would turn a network outage into a green graph.
+
+### Prover
+
+`routine` and `standard` leaves only. Not because a model could not attempt a
+hard lemma, but because proving the cheap leaves first is a *falsification test
+on the strategy*: if a bookkeeping lemma the decomposition requires turns out to
+be false or to need a hypothesis nobody has, the strategy is wrong and it cost a
+few cheap attempts instead of three weeks.
+
+It **never sets `local_status`.** It writes prose into the Proof section and
+stops; whether that prose is a proof is the verifier's judgement, made
+separately, and the verifier is not told who wrote it.
+
+A refusal is a result. `attempted: false` with a reason — needs an idea, missing
+a hypothesis, the statement looks false — is often the most valuable thing this
+role produces, because it is usually a fact about the *decomposition* rather than
+about the lemma. Steps it could not justify go into `gaps`, which become `% GAP:`
+comments in the proof and a note on the node.
+
+---
+
+## 14. Recompile, jobs and resume
+
+`bp recompile` verifies only what needs it — nodes that are **stale** or
+**unverified with a proof** — and then sweeps. Within that set it works in an
+order that makes a partial run useful: the path to the target first, shallow
+before deep. A partial run should leave the user closer to knowing about their
+theorem, not about an unrelated branch.
+
+**The bill is previewable.** `--dry-run` prints the nodes, the call count and an
+estimated cost, computed from the prompts that would actually be sent, before any
+of them happen. Confirmation calls are excluded and the preview says so — they
+happen only for objections, and how many there will be is not knowable in
+advance. With subscription backends there is no dollar figure and it reports call
+counts instead of printing a reassuring `$0.00`.
+
+**Results write as they land**, through `ops`, so an interrupted run keeps
+everything it paid for.
+
+**Resuming performs no duplicate paid work.** A job record is written to
+`.bp/jobs/<id>.json` *before* any work happens and updated after **each** task,
+so the file on disk is always at least as current as the paid work done. Task
+granularity is one node's verification — fine enough that losing one is cheap.
+`bp resume [job_id]` re-reads the record and skips completed tasks; the
+obligation cache means even a re-entered task mostly hits cache rather than the
+network.
+
+---
+
+## 15. Not built yet
 
 **L2 — the web UI.** FastAPI plus vanilla JS, Cytoscape.js for the graph, KaTeX
 for the mathematics, no build step. Every endpoint calls an existing `ops.py` or
 role function; the UI contains no logic of its own. Role calls run as background
-jobs with a live progress indicator, because an expand takes 30–90 seconds and
-the interface must never appear frozen.
+jobs with a live progress indicator, because an expand takes minutes and the
+interface must never appear frozen.
 
 **L3** is driven by the friction log from using L2, not planned in advance.
 

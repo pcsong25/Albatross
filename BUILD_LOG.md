@@ -146,3 +146,152 @@ the verifier in L1 as a narrow per-obligation question — a far better position
 than having it buried in prose — but until L1 exists, nothing checks it at all.
 A user who believes the check is stronger than it is will over-trust green
 nodes. This is stated in `ARCHITECTURE.md` §6 as well.
+
+---
+
+## L1 — Agents
+
+**Date** 2026-07-29
+
+### What was built
+
+The agent layer, and the four roles on top of it. Every model call in the system
+now goes through `bp/agents/`; nothing else imports an SDK or shells out to a
+model, which is what makes the call log complete, the budget enforceable and
+`--replay` able to reproduce a session offline.
+
+No UI, per the milestone's *do not build* list.
+
+### Files added
+
+```
+bp.yaml                          which model plays which role
+bp/agents/
+  base.py        Backend.complete: JSON, validated, retried once, logged, budgeted
+  registry.py    role -> backend from bp.yaml; the price table
+  log.py         the call log, which is also the --replay cache
+  claude_api.py  openai_api.py  claude_cli.py  codex_cli.py  scripted.py
+bp/roles/
+  context.py     deterministic context assembly
+  decompose.py check.py verify.py prove.py
+  prompts/       decompose, check_reduction, check_triviality,
+                 verify_obligation, verify_proof, verify_confirm, prove
+bp/jobs.py       job records
+bp/recompile.py  selection, the previewable bill, run and resume
+bp/cli_agents.py the L1 commands
+tests/test_agents.py test_roles.py test_recompile.py   (+88 tests, 230 total)
+```
+
+### What the acceptance run showed
+
+This machine has the `claude` and `codex` CLIs and no API key, so the run used
+the subscription backends — the case the whole role-indirection layer exists for.
+The target was the shipped gCLM development rather than one the user supplied;
+that substitution is flagged in the report.
+
+**`bp expand gclm.elb-b`** — the one genuinely hard node — produced three
+children with difficulty labels (`standard`, `hard`, `standard`), a reduction
+proof, and a complete `uses` table exercising all four source kinds. Clean on the
+first attempt after a bug fix (below); `bp render` compiles the result to 5
+pages, model-written LaTeX and all.
+
+The mathematics was substantive rather than filler. The decomposer isolated the
+missing comparison as its own node and then, unprompted, proposed a third child
+asserting that a high-frequency family *contradicts* it — which is the
+"constraint emission" behaviour `DESIGN.md` §12.8 describes, arrived at on its own.
+
+**`bp check-decomp gclm.elb-b`** returned nine located problems across its two
+calls, every one specific and quoted. The strongest: the decomposition is
+internally contradictory — one child's conclusion is the negation of another's —
+and no structural check can see that, because the graph only records that both
+are cited. It supplied the counterexample family $f_n = -n^{-1}\sin(nx)$ and
+named the child that should have existed and does not. This is precisely the
+class of failure the checker is for, and it found it on the first real
+decomposition it was ever shown.
+
+**Kill and resume.** `bp recompile` selected two nodes and reported its bill
+before spending it. The run was killed with `pkill` after the first node's
+verdict landed. The job record showed `completed: [verify:gclm.blowup-criterion]`,
+`pending: [verify:gclm.local-existence]`. `bp resume` then made **six calls, all
+six about `gclm.local-existence` and none about the completed node** — verified by
+diffing `.bp/agent/` before and after, which is the acceptance criterion.
+
+**`--replay` with no network.** `bp expand --replay` reproduced the whole
+decomposition from the log, instantly and offline.
+
+```
+pytest -q       230 passed
+bp check        1 error, 1 note over 9 active nodes (the planted DIS011, unchanged)
+bp render       compiles; 5 pages, 4 with --clean
+```
+
+### The verifier found a real error in my own fixture
+
+The single most valuable output of the run. `gclm.blowup-criterion` — a lemma I
+wrote by hand in L0 and believed — says that $z' \ge \kappa z^2$ with $z(0) > 0$
+forces $T \le 1/(\kappa z(0))$ **and** $z(t) \to \infty$ as $t \to T^-$.
+
+The second clause is false as written. $T$ is an arbitrary interval endpoint, not
+the maximal existence time. Take $\kappa = 1$, $T = 1/2$, $z(t) = 1/(1-t)$: both
+hypotheses hold, the bound on $T$ holds, and $z \to 2$.
+
+Both panel members found it independently — Claude via `claude -p`, Codex via
+`codex exec` — and all four objections survived the confirmation pass. The node
+is now `flagged`.
+
+It has been left flagged rather than quietly corrected. It is the honest state of
+the graph, it is the acceptance evidence, and how to restate the lemma is the
+user's call: either assume $T$ maximal, or drop the blow-up clause and keep the
+bound on $T$, which is all `gclm.blowup` actually uses.
+
+### What surprised me
+
+**The single highest-value bug came from running it for real, not from tests.**
+The prompt asks the decomposer to reference siblings by slug (`child:elb-a`),
+because it cannot know the project's id namespace. `candidate_graph` translated
+slugs to ids in the *keys* of `uses` and left the *values* alone — so every
+`child:` discharge came back `DIS014`, and the repair round was spent on a problem
+the system had invented for itself. Eighty-eight tests passed through this,
+because every one of them used `hypothesis:` sources. The first real
+decomposition hit it immediately. There is now a test for it.
+
+**`BudgetExceeded` subclasses `AgentError`, and the panel was swallowing it.** The
+verifier tolerates one panel member failing — the other still reads the proof.
+That handler was also catching the budget cap, so a recompile ran straight past
+its limit. Worse: a node whose verifiers had *all* failed was recorded as
+`verified`, because no objections had been collected. A network outage would have
+turned into a green graph. Both halves are fixed: `BudgetExceeded` and
+`ReplayMiss` are re-raised, and `verify` refuses to record a verdict when no panel
+member answered. Silence is not agreement.
+
+**`rich` ate the mathematics.** `console.print` applies markup to strings, so a
+statement containing `\[` displayed as `[` and `[0,T)` was read as a style tag.
+The files were correct throughout — it was purely `bp show`. Everything authored
+now prints as `Text`, never as markup. Worth remembering for L2: the same class
+of bug, in a browser, is an XSS hole rather than a cosmetic one.
+
+**Real models produce LaTeX in JSON with single backslashes, constantly.** The
+repair path built on suspicion fired on the very first live call and on most
+since. It is not an edge case; it is the normal case.
+
+**Subscription CLIs are slow.** A decomposition prompt runs 5–15 minutes through
+`codex exec`, against seconds for the same call on the API. Role timeouts are set
+to 900s and anything driving these backends needs to expect minutes, which is
+also why L2's async job design is not optional.
+
+### What was deferred, and why
+
+Within L1's own scope: the recompile is the model tier only — the cheap
+deterministic tiers exist but are not wired in *below* the agents as a gate; there
+is no watch mode; and there is no lock, so two concurrent `bp` processes would
+both write the obligation cache and the last one would win. All three are new
+rows in `UPGRADE.md` with the signal that says they are needed. The third gets
+sharper in L2, where running the UI and a CLI at once is easy.
+
+Thirteen decisions the brief did not settle are recorded in `DECISIONS.md`
+(D017–D029). The two worth flagging: a decomposition that still fails after two
+repair rounds is **written anyway** with its diagnostics reported (D020), matching
+how the rest of the system treats debt; and the shipped `bp.yaml` points at the
+subscription CLIs because that is what runs on this machine (D026) — with the
+consequence, stated in the file, that the dollar cap can never fire and the call
+cap is the only real limit.
