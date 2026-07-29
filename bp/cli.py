@@ -20,7 +20,8 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from . import checks, events as events_mod, ops, render as render_mod, why as why_mod
+from . import checks, events as events_mod, frontier as frontier_mod, ops
+from . import render as render_mod, why as why_mod
 from .discharge import all_obligations, obligations_for
 from .graph import GraphError
 from .paths import ProjectNotFound, find_project
@@ -320,6 +321,106 @@ def events_cmd(
 
 
 # --- writes -------------------------------------------------------------------
+
+
+STARTER_STATEMENT = """% Replace this with the theorem you are trying to prove.
+% It is LaTeX prose: write it the way you would write it in a paper.
+%
+% State the hypotheses in the `hypotheses` list in the frontmatter as well —
+% those are what a parent cites when it uses this node, and what the discharge
+% check reads. Their `tex` is a math-mode fragment: `s > 3/2`, not `$s > 3/2$`.
+"""
+
+
+@app.command()
+def init(
+    directory: Path = typer.Argument(
+        Path("."), help="where to create the project (default: here)"
+    ),
+    node_id: str = typer.Option(..., "--id", help="id of the target node, e.g. gclm.main"),
+    statement: Optional[str] = typer.Option(None, "--statement"),
+    statement_file: Optional[Path] = typer.Option(None, "--statement-file"),
+    role: str = typer.Option("theorem", "--role"),
+) -> None:
+    """Start a project: make `nodes/`, write the target node, copy `bp.yaml`.
+
+    Everything else in the system is reachable once one node exists.
+    """
+    root = directory.expanduser().resolve()
+    nodes_dir = root / "nodes"
+    if nodes_dir.exists() and any(nodes_dir.glob("*.md")):
+        err_console.print(
+            f"[bold red]error[/] {nodes_dir} already has nodes. "
+            "Use `bp new` to add one."
+        )
+        raise typer.Exit(code=1)
+    nodes_dir.mkdir(parents=True, exist_ok=True)
+
+    text = STARTER_STATEMENT
+    if statement_file is not None:
+        text = statement_file.expanduser().read_text(encoding="utf-8")
+    elif statement is not None:
+        text = statement
+
+    project = _project(root)
+    try:
+        ops.add_node(
+            project, node_id, role=role, statement=text, target=True, difficulty="hard"
+        )
+    except ops.OpError as exc:
+        err_console.print(f"[bold red]error[/] {exc}")
+        raise typer.Exit(code=1)
+
+    config = root / "bp.yaml"
+    if not config.exists():
+        shipped = Path(__file__).parent.parent / "bp.yaml"
+        if shipped.exists():
+            config.write_text(shipped.read_text(encoding="utf-8"), encoding="utf-8")
+
+    console.print(f"created {nodes_dir / (node_id + '.md')}")
+    console.print()
+    console.print("Next:")
+    console.print(f"  1. write the theorem into that file, or edit it in the browser")
+    console.print(f"  2. check which models will run:   [bold]bp agents[/]")
+    console.print(f"  3. open it:                       [bold]bp ui[/]")
+
+
+@app.command()
+def new(
+    node_id: str = typer.Argument(..., help="id of the new node"),
+    parent: Optional[str] = typer.Option(None, "--parent", help="attach as its child"),
+    role: str = typer.Option("lemma", "--role"),
+    difficulty: str = typer.Option("unknown", "--difficulty"),
+    statement: Optional[str] = typer.Option(None, "--statement"),
+    statement_file: Optional[Path] = typer.Option(None, "--statement-file"),
+    target: bool = typer.Option(False, "--target"),
+    root: Optional[Path] = typer.Option(None, "--root"),
+) -> None:
+    """Create a node by hand. The statement is yours; nothing is generated."""
+    text = ""
+    if statement_file is not None:
+        text = statement_file.expanduser().read_text(encoding="utf-8")
+    elif statement is not None:
+        text = statement
+    _run_op(
+        ops.add_node,
+        _project(root),
+        node_id,
+        role=role,
+        statement=text,
+        difficulty=difficulty,
+        target=target,
+        parent=parent,
+    )
+
+
+@app.command()
+def frontier(
+    root: Optional[Path] = typer.Option(None, "--root"),
+) -> None:
+    """Nodes awaiting a decision, best first. What to work on next."""
+    project, graph = _graph(root)
+    console.print(Text(frontier_mod.summarise(frontier_mod.rank(graph))))
 
 
 @app.command()
