@@ -400,12 +400,13 @@ def archive(
     _run_op(ops.archive, _project(root), node_id, not keep_descendants)
 
 
-# --- L1: the agent commands ---------------------------------------------------
-# Registered from a separate module so that everything above stays runnable with
+# --- L1 and L2 commands -------------------------------------------------------
+# Registered from separate modules so that everything above stays runnable with
 # no key, no network and no configuration.
-from . import cli_agents  # noqa: E402
+from . import cli_agents, cli_ui  # noqa: E402
 
 cli_agents.register(app)
+cli_ui.register(app)
 
 
 def main() -> None:  # pragma: no cover - console-script entry point

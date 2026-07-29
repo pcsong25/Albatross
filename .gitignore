@@ -12,3 +12,8 @@ __pycache__/
 # lands — is history and IS tracked.
 
 .DS_Store
+
+# Vendored front-end libraries. `bp ui --vendor` fetches them (23 files, ~1 MB)
+# for working offline; the page falls back to a CDN when they are absent. Third-
+# party minified builds and fonts do not belong in a mathematics project's history.
+bp/ui/static/vendor/

@@ -293,6 +293,7 @@ class Backend(ABC):
         budget: Budget | None = None,
         replay: bool = False,
         pricing: dict[str, Any] | None = None,
+        observer: Any = None,
     ):
         self.model = model
         self.role = role
@@ -301,7 +302,19 @@ class Backend(ABC):
         self.budget = budget
         self.replay = replay
         self.pricing = pricing or {}
+        #: Called as ``observer(role, model, phase)`` around each call. The web
+        #: interface uses it to name the agent that is working; nothing in the
+        #: core depends on it being set.
+        self.observer = observer
         self._last_error = ""
+
+    def _notify(self, phase: str) -> None:
+        if self.observer is None:
+            return
+        try:
+            self.observer(self.role, self.model, phase)
+        except Exception:  # pragma: no cover - an observer must never break a call
+            pass
 
     # --- what subclasses provide --------------------------------------------
 
@@ -358,6 +371,7 @@ class Backend(ABC):
         if cached is not None:
             completion = Completion(**cached["completion"])
             replayed = True
+            self._notify("replay")
         elif self.replay:
             raise ReplayMiss(
                 f"--replay: no logged call for {self.role or self.name} "
@@ -369,6 +383,7 @@ class Backend(ABC):
             ok, reason = self.available()
             if not ok:
                 raise BackendUnavailable(f"{self.name}: {reason}")
+            self._notify("start")
             completion = self.invoke(system, user, timeout)
             if self.budget is not None:
                 self.budget.record(completion.cost_usd)

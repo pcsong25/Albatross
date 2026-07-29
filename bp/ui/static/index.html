@@ -1,0 +1,83 @@
+<!doctype html>
+<!--
+  Albatross — the proof graph, in a browser.
+
+  Vanilla JS, no build step, no npm. Two libraries from a CDN: Cytoscape for the
+  graph and KaTeX for the mathematics. `bp ui --vendor` downloads both into
+  static/vendor/ for working offline; if that directory exists the loader below
+  prefers it.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Albatross</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/vendor/katex.min.css"
+      onerror="this.onerror=null;this.href='https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css'">
+<script>
+  // Prefer a vendored copy; fall back to the CDN. Written this way rather than
+  // with a bundler because the person maintaining this is a mathematician, and
+  // a webpack config would be a liability.
+  function load(src, fallback) {
+    document.write('<script src="' + src + '" onerror="loadFallback(\'' + fallback + '\')"><\/script>');
+  }
+  function loadFallback(src) {
+    document.write('<script src="' + src + '"><\/script>');
+  }
+</script>
+<script>load('/static/vendor/cytoscape.min.js', 'https://cdn.jsdelivr.net/npm/cytoscape@3.30.2/dist/cytoscape.min.js');</script>
+<script>load('/static/vendor/katex.min.js', 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js');</script>
+</head>
+<body>
+
+<header id="actionbar">
+  <span class="brand">Albatross</span>
+  <span id="certificate" class="certificate"></span>
+  <span class="spacer"></span>
+  <button id="btn-frontier" class="bar">Frontier</button>
+  <button id="btn-recompile" class="bar">Recompile…</button>
+  <button id="btn-render" class="bar">Render LaTeX</button>
+  <button id="btn-check" class="bar">Check</button>
+  <button id="btn-history" class="bar">History</button>
+  <button id="btn-agents" class="bar">Agents</button>
+  <span id="jobstrip" class="jobstrip"></span>
+</header>
+
+<main>
+  <section id="graphpanel">
+    <div id="cy"></div>
+    <div id="legend" class="legend">
+      <div class="legend-title">Status<button id="legend-toggle" title="hide">–</button></div>
+      <div id="legend-body">
+      <div><i class="sw proved"></i>proved</div>
+      <div><i class="sw proved_modulo"></i>proved modulo</div>
+      <div><i class="sw blocked"></i>blocked</div>
+      <div><i class="sw open"></i>open</div>
+      <div><i class="sw unsound"></i>unsound</div>
+      <div class="legend-sep"></div>
+      <div><i class="sw dashed"></i>stale</div>
+      <div><i class="sw thick"></i>flagged</div>
+      <div class="legend-note">▸ on a node folds its subtree — view only, the graph does not change.</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="detailpanel">
+    <div id="detail" class="empty">Select a node.</div>
+  </section>
+</main>
+
+<div id="overlay" class="overlay hidden">
+  <div class="sheet">
+    <header><span id="sheet-title"></span><button id="sheet-close">×</button></header>
+    <div id="sheet-body"></div>
+    <footer id="sheet-actions"></footer>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

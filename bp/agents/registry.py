@@ -151,12 +151,15 @@ class Registry:
         replay: bool = False,
         budget: Budget | None = None,
         log: CallLog | None = None,
+        observer: Any = None,
     ):
         self.project = project
         self.config = config or load_config(project)
         self.replay = replay
         self.log = log if log is not None else CallLog.for_project(project)
         self.budget = budget if budget is not None else self.default_budget()
+        #: Passed to every backend; see :attr:`bp.agents.base.Backend.observer`.
+        self.observer = observer
         self._cache: dict[str, Backend] = {}
 
     def default_budget(self) -> Budget:
@@ -183,6 +186,7 @@ class Registry:
             budget=self.budget,
             replay=self.replay,
             pricing=self.config.price_table(),
+            observer=self.observer,
         )
         self._cache[role] = backend
         return backend
