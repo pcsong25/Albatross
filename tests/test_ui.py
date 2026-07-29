@@ -160,14 +160,42 @@ class TestMutations:
         assert ok.status_code == 200
         assert graph_of(project)["b"].local_status == "admitted"
 
-    def test_add_child_creates_and_attaches(self, client, project):
+    def test_add_child_creates_attaches_and_opens_its_discharge_row(self, client, project):
+        """Attaching a lemma must not hand the user a DIS010 they did not cause."""
         small(project)
         response = client.post(
             "/api/node/b/child",
             json={"id": "b.helper", "statement": "A helper.", "difficulty": "routine"},
         )
         assert response.status_code == 200
-        assert graph_of(project)["b"].children == ["b.helper"]
+        parent = graph_of(project)["b"]
+        assert parent.children == ["b.helper"]
+        assert "b.helper" in parent.uses
+        # `t` cites `b` with no row — that is the fixture's own DIS010. The point
+        # is that attaching `b.helper` did not add a second one.
+        offending = {
+            d["code"]
+            for d in client.get("/api/check").json()["diagnostics"]
+            if "b.helper" in d["message"]
+        }
+        assert "DIS010" not in offending
+
+    def test_the_discharge_table_is_editable_from_the_browser(self, client, project):
+        """Without this the browser can create a DIS011 it cannot then fix."""
+        small(project)
+        response = client.post(
+            "/api/node/t/uses",
+            json={"uses": {"a": {"applied_to": "y", "discharges": {"H1": "proof:inline"}}}},
+        )
+        assert response.status_code == 200
+        assert graph_of(project)["t"].uses["a"].discharges["H1"] == "proof:inline"
+
+    def test_a_malformed_discharge_table_is_refused(self, client, project):
+        small(project)
+        response = client.post(
+            "/api/node/t/uses", json={"uses": {"a": {"discharges": "not a mapping"}}}
+        )
+        assert response.status_code == 400
 
     def test_a_bad_mutation_is_a_400_with_the_reason(self, client, project):
         small(project)

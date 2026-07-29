@@ -263,6 +263,17 @@ def add_node(
             raise OpError(f"parent {parent!r} does not exist")
         if node_id not in parent_node.children:
             set_authored(parent_node, "children", [*parent_node.children, node_id])
+            # Give the new child its row in the discharge table. Citing a child
+            # with no row at all is `DIS010`, and a user who has just attached a
+            # lemma by hand did not make that mistake — the system did. With the
+            # row present, the checks say the useful thing instead: `DIS011`,
+            # once per hypothesis that still needs a source.
+            uses = dict(parent_node.uses)
+            uses.setdefault(node_id, Use())
+            set_authored(
+                parent_node, "uses", uses,
+                {c: u.model_dump() for c, u in uses.items()},
+            )
             write_node(parent_node)
             graph = open_graph(project)
 

@@ -73,6 +73,10 @@ class AttachBody(BaseModel):
     children: list[str]
 
 
+class UsesBody(BaseModel):
+    uses: dict[str, dict[str, Any]]
+
+
 class ArchiveBody(BaseModel):
     cascade: bool = True
 
@@ -407,6 +411,18 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
     def api_set_children(node_id: str, body: AttachBody) -> dict[str, Any]:
         refuse_if_busy(node_id)
         mutate(ops.set_children, project, node_id, body.children)
+        return {"ok": True}
+
+    @app.post("/api/node/{node_id}/uses")
+    def api_set_uses(node_id: str, body: UsesBody) -> dict[str, Any]:
+        """Replace the discharge table.
+
+        Shape is validated here; whether it is *complete* is the discharge
+        check's job, and whether each named source actually entails the
+        hypothesis is the verifier's.
+        """
+        refuse_if_busy(node_id)
+        mutate(ops.set_uses, project, node_id, body.uses)
         return {"ok": True}
 
     @app.post("/api/sweep")

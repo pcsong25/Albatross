@@ -448,8 +448,13 @@ async function showDetail(id) {
   }
 
   // --- discharge table
-  if (Object.keys(node.uses).length) {
-    panel.append(el('h3', { class: 'section' }, 'Discharges'));
+  if (node.children.length || Object.keys(node.uses).length) {
+    const head = el('h3', { class: 'section' }, 'Discharges');
+    head.append(el('button', {
+      ...(busy ? { disabled: 'disabled' } : {}),
+      onclick: () => dischargeDialog(node),
+    }, 'edit'));
+    panel.append(head);
     const uses = el('div', { class: 'uses' });
     for (const [cid, use] of Object.entries(node.uses)) {
       const head = el('div', { class: 'child' });
@@ -737,6 +742,71 @@ function addChildDialog(node) {
             difficulty: diffSelect.value,
           });
           closeSheet(); toast('child created'); await refresh();
+        } catch (e) { toast(e.message, true); }
+      },
+    },
+  ]);
+}
+
+/** Edit the discharge table: one input per hypothesis of each cited child.
+ *
+ * The form is generated from the children's *actual* hypotheses, so the rows you
+ * have to fill in are exactly the rows the discharge check will ask about. There
+ * is no way to leave one out by forgetting it exists. */
+async function dischargeDialog(node) {
+  const body = el('div', {});
+  body.append(el('p', { class: 'small muted' },
+    'For every hypothesis of every lemma this proof cites, say where it comes from. ' +
+    'The check verifies that a source is named — not that it entails the hypothesis; ' +
+    'that question goes to the verifier, one obligation at a time.'));
+
+  const forms = {};
+  for (const cid of node.children) {
+    let child;
+    try { child = await api('/api/node/' + encodeURIComponent(cid)); }
+    catch (e) { continue; }
+    const use = node.uses[cid] || { applied_to: '', discharges: {} };
+
+    body.append(el('h3', { class: 'section' }, cid));
+    const applied = el('input', { type: 'text', placeholder: 'applied to … (LaTeX, optional)' });
+    applied.value = use.applied_to || '';
+    body.append(applied);
+
+    const rows = {};
+    if (!child.hypotheses.length) {
+      body.append(el('p', { class: 'small muted' }, 'No hypotheses — nothing to discharge.'));
+    }
+    for (const h of child.hypotheses) {
+      const label = el('label', { class: 'small' });
+      label.append(el('span', { class: 'hid' }, h.id), ' ');
+      label.append(mathProse('$' + h.tex + '$'));
+      body.append(label);
+      const input = el('input', {
+        type: 'text',
+        placeholder: 'hypothesis:H1 | child:some.id | proof:… | literature:… | ADMITTED: …',
+      });
+      input.value = (use.discharges || {})[h.id] || '';
+      body.append(input);
+      rows[h.id] = input;
+    }
+    forms[cid] = { applied, rows };
+  }
+
+  sheet('Discharges for ' + node.id, body, [
+    { label: 'Cancel', onClick: closeSheet },
+    {
+      label: 'Save', primary: true, onClick: async () => {
+        const uses = {};
+        for (const [cid, form] of Object.entries(forms)) {
+          const discharges = {};
+          for (const [hid, input] of Object.entries(form.rows)) {
+            if (input.value.trim()) discharges[hid] = input.value.trim();
+          }
+          uses[cid] = { applied_to: form.applied.value, discharges: discharges };
+        }
+        try {
+          await post(`/api/node/${encodeURIComponent(node.id)}/uses`, { uses });
+          closeSheet(); toast('discharge table saved'); await refresh();
         } catch (e) { toast(e.message, true); }
       },
     },
