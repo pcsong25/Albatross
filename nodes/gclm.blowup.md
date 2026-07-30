@@ -58,6 +58,43 @@ uses:
       # H2 is deliberately absent: DIS011 fires here, and it should.
 
 # --- computed fields: written by `bp sweep`. Never edit them, and never let an agent write them. ---
+# `claims` and `claims_of` are the claim ledger. Normally `bp extract` writes them;
+# this one is hand-written as a fixture, and c4 is deliberately unsourced so that
+# LED001 fires on exactly the step the verifiers also objected to. That is the
+# point of the ledger: the `uses` table above covers the CHILDREN's hypotheses and
+# says nothing about what this reduction asserts on its own account.
+claims:
+  - id: c1
+    text: "\\text{there is a unique classical solution on a maximal } [0,T_{\\max})"
+    source: {kind: child, ref: gclm.local-existence}
+  - id: c2
+    text: "\\omega(t,\\cdot) \\text{ is odd for every } t, \\text{ hence } \\omega(t,0) = 0"
+    source: {kind: child, ref: gclm.local-existence}
+  - id: c3
+    text: "z(0) = -\\omega_0'(0) > 0"
+    source: {kind: hypothesis, ref: H2}
+  - id: c4
+    text: "z(t) := -\\partial_x\\omega(t,0) \\text{ is well defined and } C^1 \\text{ on } [0,T_{\\max})"
+    source: {kind: none, ref: ""}
+  - id: c5
+    text: "z'(t) \\ge \\kappa z(t)^2 \\text{ with } \\kappa = \\kappa(a) > 0"
+    source: {kind: child, ref: gclm.energy-lower-bound}
+  - id: c6
+    text: "T_{\\max} \\le 1/(\\kappa z(0)) < \\infty"
+    source: {kind: child, ref: gclm.blowup-criterion}
+  - id: c7
+    text: "\\|\\partial_x\\omega(t)\\|_{L^\\infty} \\ge z(t)"
+    source: {kind: claim, ref: c4}
+claims_of: '322cdc2e8ee3'
+verification:
+  checked_at: '2026-07-29T21:41:22+00:00'
+  level: standard
+  deterministic: {integrity: pass, children_used: pass, discharge: fail, ledger: fail}
+  ledger: {claims: 7, unsourced: 1, checked: 0, flagged: 0, cached: 0}
+  obligations: {total: 6, verified: 6, flagged: 0, cached: 0}
+  whole_proof: {verifier_a: objection_confirmed, verifier_b: objection_confirmed}
+  statement_audit: not_run
+  models: {verifier_a: opus, verifier_b: default, confirm: opus}
 global_status: blocked:stale
 support: []
 blocked_by: []

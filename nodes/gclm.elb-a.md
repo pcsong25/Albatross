@@ -19,6 +19,33 @@ support: []
 blocked_by: []
 statement_hash: '27260e7d162d'
 verified_against: {self: '27260e7d162d'}
+# A clean verification record, so the fixture shows both shapes. `deep` is what
+# this node's green actually means: every claim in the ledger was checked, the
+# statement was audited, and both panel members read the proof. A node verified at
+# `quick` is a weaker claim, and the record is what keeps the two distinguishable.
+claims:
+  - id: c1
+    text: "y(t) := \\partial_x\\omega(t,0) \\text{ satisfies } y'(t) = (1-a) u_x(t,0) y(t)"
+    source: {kind: computation, ref: "differentiating the equation at the origin, notes/elb-a-derivation.tex"}
+  - id: c2
+    text: "\\omega(t,0) = 0 \\text{ and } u(t,0) = 0 \\text{ for all } t"
+    source: {kind: hypothesis, ref: H2}
+  - id: c3
+    text: "u_x(t,\\cdot) = H\\omega(t,\\cdot) \\in C([0,T_{\\max}); C^0)"
+    source: {kind: hypothesis, ref: H1}
+  - id: c4
+    text: "y(t) = y(0)\\exp\\Big(\\int_0^t (1-a) u_x(\\tau,0)\\, d\\tau\\Big)"
+    source: {kind: claim, ref: c1}
+claims_of: '007393db156d'
+verification:
+  checked_at: '2026-07-24T09:12:00+00:00'
+  level: deep
+  deterministic: {integrity: pass, children_used: pass, discharge: pass, ledger: pass}
+  ledger: {claims: 4, unsourced: 0, checked: 4, flagged: 0, cached: 0}
+  obligations: {total: 0, verified: 0, flagged: 0, cached: 0}
+  whole_proof: {verifier_a: no_objection, verifier_b: no_objection}
+  statement_audit: pass
+  models: {extractor: haiku-4.5, obligation: sonnet-5, verifier_a: opus, verifier_b: default, auditor: opus}
 stale: false
 ---
 
