@@ -1973,13 +1973,39 @@ async function agentsSheet() {
   const body = el('div', {});
   const table = el('table', { class: 'plain' });
   table.append(el('tr', {}, el('th', {}, 'role'), el('th', {}, 'backend'),
-                            el('th', {}, 'model'), el('th', {}, 'usable')));
+                            el('th', {}, 'model'), el('th', {}, 'from'),
+                            el('th', {}, 'usable')));
+  const unconfigured = [];
+  const broken = [];
   for (const role of data.roles) {
+    if (role.from && role.from !== 'bp.yaml') unconfigured.push(role.role);
+    if (!role.usable) broken.push(role.role);
     table.append(el('tr', {},
       el('td', {}, role.role), el('td', {}, role.backend), el('td', {}, role.model),
+      el('td', { class: role.from === 'bp.yaml' ? 'muted' : '' }, role.from || 'bp.yaml'),
       el('td', {}, role.usable ? 'yes' : 'no — ' + role.note)));
   }
   body.append(table);
+
+  // A role nobody configured, or one that cannot run, is a thing to say out loud —
+  // not something to leave the user to discover from a provider error mid-job.
+  if (broken.length) {
+    body.append(el('div', { class: 'warnbox' },
+      el('div', {}, el('b', {}, `${broken.length} role(s) cannot run here: `),
+                    broken.join(', ') + '.'),
+      el('div', { class: 'small' },
+        'Any job that needs one of these will fail. Point them at a backend you can ' +
+        'use in bp.yaml.')));
+  }
+  if (unconfigured.length) {
+    body.append(el('div', { class: 'warnbox' },
+      el('div', {}, el('b', {}, `${unconfigured.length} role(s) are not in your bp.yaml: `),
+                    unconfigured.join(', ') + '.'),
+      el('div', { class: 'small' },
+        'They were filled in as shown in the “from” column — inherited from a role ' +
+        'you did configure where possible, so adding a role to Albatross never moves ' +
+        'your project to a different provider. Add them explicitly to choose.')));
+  }
   body.append(el('p', { class: 'small muted' },
     `Budget: $${data.budget.per_recompile_usd} and ` +
     `${data.budget.max_calls_per_recompile} call(s) per recompile. ` +

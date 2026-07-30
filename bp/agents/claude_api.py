@@ -29,10 +29,31 @@ class ClaudeAPIBackend(Backend):
     reports_cost = True
 
     def available(self) -> tuple[bool, str]:
+        """Can this actually run here? Credentials included.
+
+        This used to check only that the ``anthropic`` package imported, so
+        ``bp agents`` reported ``usable: yes`` on a machine with no key at all — and
+        ``bp agents`` is the one place whose whole job is to tell you a backend cannot
+        run *before* you spend a click on it. Saying yes there and failing later is
+        worse than not having the column.
+
+        The client is asked rather than the environment guessed at: the SDK accepts
+        ``ANTHROPIC_API_KEY``, ``ANTHROPIC_AUTH_TOKEN`` and a credentials file written
+        by ``ant auth login``, and enumerating those here would go stale.
+        """
         try:
-            import anthropic  # noqa: F401
+            import anthropic
         except ImportError:  # pragma: no cover - the dependency is declared
             return False, "the `anthropic` package is not installed"
+        try:
+            client = anthropic.Anthropic()
+        except Exception as exc:  # pragma: no cover - construction rarely fails
+            return False, f"could not build an Anthropic client: {exc}"
+        if not (getattr(client, "api_key", None) or getattr(client, "auth_token", None)):
+            return False, (
+                "no Anthropic credentials. Set ANTHROPIC_API_KEY, or run "
+                "`ant auth login`, or point this role at a CLI backend in bp.yaml"
+            )
         return True, ""
 
     def invoke(self, system: str, user: str, timeout: float) -> Completion:
@@ -71,6 +92,20 @@ class ClaudeAPIBackend(Backend):
             raise AgentError(f"anthropic {exc.status_code}: {exc.message}") from exc
         except anthropic.APIConnectionError as exc:
             raise AgentError(f"could not reach the Anthropic API: {exc}") from exc
+        except TypeError as exc:
+            # The SDK resolves credentials *lazily*, at request time, and signals
+            # their absence with a bare TypeError rather than AuthenticationError. So
+            # a missing key escaped every handler above and surfaced to the user as
+            # `TypeError: "Could not resolve authentication method..."`, which reads
+            # like a bug in Albatross rather than a thing they can fix.
+            if "authentication" in str(exc).lower():
+                raise BackendUnavailable(
+                    "no Anthropic credentials, so this role cannot run. Set "
+                    "ANTHROPIC_API_KEY, or run `ant auth login`, or point it at a CLI "
+                    "backend in bp.yaml. Run `bp agents` to see every role's backend "
+                    "and whether it is usable here."
+                ) from exc
+            raise
 
         if message.stop_reason == "refusal":
             category = getattr(getattr(message, "stop_details", None), "category", None)

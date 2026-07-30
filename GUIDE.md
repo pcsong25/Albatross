@@ -777,7 +777,18 @@ Backends:
 | `claude_cli` | `claude -p` | a Claude subscription | **no** |
 | `codex_cli` | `codex exec` | a Codex subscription | **no** |
 
-`bp agents` prints the table and says which can actually run here.
+`bp agents` prints the table and says which can actually run here — and where each
+role's backend came from:
+
+| `from` | Means |
+|---|---|
+| `bp.yaml` | you configured it |
+| `inherited from <role>` | Albatross added this role after your `bp.yaml` was written, so it copied the nearest role you *did* configure. Your project never moves to a different provider behind your back. |
+| `built-in default` | nothing to inherit from. **Check this one** — the built-in defaults are Anthropic, and if you have no key the role cannot run. |
+
+Add the inherited ones to your `bp.yaml` explicitly whenever you want to choose for
+yourself. `usable: no` means any job needing that role will fail, and `bp agents` is
+the only place that tells you before you spend a click.
 
 **Put the two verifiers on different families.** That is the entire reason there
 are two of them; two models from the same lab miss the same things, and the

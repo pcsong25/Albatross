@@ -1294,3 +1294,56 @@ collisions that invents one is worse than useless.
 and the theorem environments (D-ordering, `ARCHITECTURE.md` §6b), so anything they
 load or define wins — the display exists so they know what they are overriding, not so
 they can fork the renderer's preamble and have it drift.
+
+---
+
+## D058 — A new role inherits from a configured one, never from a built-in default
+
+**Date** 2026-07-30 · **Milestone** L3 (friction log)
+
+Reported: *"while the bp.yaml file shows that all the agent backends are codex CLI, on
+UI it shows claude api as well (while I do not have claude api)"*, followed by
+`TypeError: "Could not resolve authentication method…"` from `bp audit`.
+
+Three bugs, and the first is mine by construction.
+
+**1. Adding a role silently changed the provider.** `load_config` started from
+`DEFAULT_ROLES` and overlaid the file, so the four roles added in Addendum A —
+`extractor`, `obligation`, `confirmer`, `auditor` — resolved to the built-in
+`claude_api` default in every project whose `bp.yaml` predated them. A user who had
+configured all five original roles for `codex_cli` had four roles pointing at Anthropic
+with no key.
+
+**Decision.** `ROLE_INHERITS` maps each new role to the configured role most like it
+(`obligation` ← `checker`, `confirmer` ← `verifier_a`, `extractor` ← `prover`,
+`auditor` ← `checker`). An unconfigured role copies the first of those that the file
+does configure, and only falls back to the built-in default when there is nothing to
+inherit from.
+
+Silently changing *provider* is the worst available default: invisible, potentially
+billed to an account the user did not mean to use, and a direct contradiction of the
+one thing `bp.yaml` exists for. Inheriting gives the answer they would obviously have
+written.
+
+**Decision.** `Config.provenance` records `bp.yaml` / `inherited from <role>` /
+`built-in default` per role, and `bp agents` and the browser both show it as a `from`
+column with a warning box listing anything not in the user's file. A role configured
+without the user's knowledge is a thing to say out loud.
+
+**2. `bp agents` reported `usable: yes` with no credentials.**
+`ClaudeAPIBackend.available` checked only that the `anthropic` package imported. That
+column's entire purpose is to say a backend cannot run *before* a click is spent on it,
+so a false yes there is worse than not having the column. It now builds a client and
+checks `api_key`/`auth_token` — asking the SDK rather than enumerating environment
+variables, which would go stale as auth methods are added.
+
+**3. The auth failure escaped as a raw `TypeError`.** The SDK resolves credentials
+lazily, at request time, and signals their absence with `TypeError` rather than
+`AuthenticationError` — so it passed every handler and reached the user as
+`TypeError: "Could not resolve authentication method…"`, which reads like a bug in
+Albatross. Now mapped to `BackendUnavailable` with the three ways out. An unrelated
+`TypeError` is re-raised, because mapping all of them would hide real bugs.
+
+**To reverse.** Delete `ROLE_INHERITS` and accept that adding a role changes existing
+projects' providers — but then `bp agents` must refuse to run until every role is
+configured explicitly, which is a worse experience for a first-time user.

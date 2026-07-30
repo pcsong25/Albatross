@@ -91,6 +91,31 @@ DEFAULT_ROLES: dict[str, dict[str, Any]] = {
 }
 
 
+#: When ``bp.yaml`` does not configure a role, which *configured* role it should copy
+#: rather than falling back to a built-in default.
+#:
+#: This exists because of a real failure. Four roles were added — `extractor`,
+#: `obligation`, `confirmer`, `auditor` — and every existing project's `bp.yaml`
+#: predated them, so all four silently resolved to the built-in `claude_api` default.
+#: A user who had configured every role for `codex_cli` found half their system
+#: pointed at Anthropic, with no key, and discovered it from a raw SDK TypeError.
+#:
+#: Silently changing *provider* is the worst possible default: it is invisible, it
+#: costs money on an account the user may not have meant to use, and it contradicts the
+#: one thing `bp.yaml` is for. Inheriting from the nearest configured role of the same
+#: tier gives the answer they would obviously have written themselves.
+ROLE_INHERITS: dict[str, tuple[str, ...]] = {
+    # Translation: the cheapest thing configured. `prover` is mid-tier and the closest
+    # pre-existing role to "cheap"; `checker` is the safe last resort.
+    "extractor": ("prover", "checker", "decomposer"),
+    # The narrow entailment checks. Mid-tier, most like the checker.
+    "obligation": ("checker", "verifier_a", "prover"),
+    # Both of these read a whole argument, like the panel does.
+    "confirmer": ("verifier_a", "verifier_b", "checker"),
+    "auditor": ("checker", "verifier_a", "decomposer"),
+}
+
+
 class ConfigError(Exception):
     pass
 
@@ -120,6 +145,11 @@ class Config(BaseModel):
     roles: dict[str, RoleConfig] = Field(default_factory=dict)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
+    #: role -> where its configuration came from: ``"bp.yaml"``, ``"inherited from
+    #: <role>"``, or ``"built-in default"``. Reported by ``bp agents`` and by the
+    #: browser, because a role the user did not configure is a role they should be
+    #: told about rather than left to discover from a provider error.
+    provenance: dict[str, str] = Field(default_factory=dict)
 
     def price_table(self) -> dict[str, dict[str, float]]:
         merged = {k: dict(v) for k, v in DEFAULT_PRICING.items()}
@@ -155,15 +185,32 @@ def load_config(project: Project) -> Config:
         data = loaded
 
     agents = data.get("agents") or {}
-    roles = dict(DEFAULT_ROLES)
-    for name, entry in (agents.get("roles") or {}).items():
-        roles[name] = entry
+    authored = dict((agents.get("roles") or {}))
+
+    roles: dict[str, Any] = {}
+    provenance: dict[str, str] = {}
+    for name in set(ROLES) | set(DEFAULT_ROLES) | set(authored):
+        if name in authored:
+            roles[name] = authored[name]
+            provenance[name] = "bp.yaml"
+            continue
+        # Not configured. Copy the nearest configured role of the same tier before
+        # reaching for a built-in default, so adding a role to this system never
+        # silently moves a project to a different provider.
+        source = next((s for s in ROLE_INHERITS.get(name, ()) if s in authored), None)
+        if source is not None:
+            roles[name] = dict(authored[source])
+            provenance[name] = f"inherited from {source}"
+        else:
+            roles[name] = DEFAULT_ROLES[name]
+            provenance[name] = "built-in default"
 
     try:
         return Config(
             roles=roles,
             budget=data.get("budget") or {},
             pricing=data.get("pricing") or {},
+            provenance=provenance,
         )
     except Exception as exc:
         raise ConfigError(f"{path}: {exc}") from exc
@@ -220,15 +267,21 @@ class Registry:
         self._cache[role] = backend
         return backend
 
-    def describe(self) -> list[tuple[str, str, str, bool, str]]:
-        """``(role, backend, model, available, reason)`` for ``bp agents``."""
+    def describe(self) -> list[tuple[str, str, str, bool, str, str]]:
+        """``(role, backend, model, available, reason, provenance)`` for ``bp agents``.
+
+        ``provenance`` is the column that would have saved a real afternoon: it says
+        whether a role's backend came from the user's ``bp.yaml``, was inherited from
+        another role, or is a built-in default they have never seen.
+        """
         rows = []
         for role in sorted(self.config.roles):
+            source = self.config.provenance.get(role, "bp.yaml")
             try:
                 backend = self.agent(role)
             except ConfigError as exc:
-                rows.append((role, "?", "?", False, str(exc)))
+                rows.append((role, "?", "?", False, str(exc), source))
                 continue
             ok, reason = backend.available()
-            rows.append((role, backend.name, backend.model, ok, reason))
+            rows.append((role, backend.name, backend.model, ok, reason, source))
         return rows

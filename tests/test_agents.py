@@ -304,3 +304,147 @@ def test_completion_carries_whatever_accounting_it_has():
     unpriced = Completion(text="x")
     assert priced.cost_usd == 0.4
     assert unpriced.cost_usd is None
+
+
+class TestRoleInheritance:
+    """A role added to Albatross must never silently move a project to a different
+    provider.
+
+    The real failure: four roles were added — extractor, obligation, confirmer,
+    auditor — and every existing `bp.yaml` predated them. All four fell back to the
+    built-in `claude_api` default, so a project configured entirely for `codex_cli`
+    had half its system pointed at Anthropic on an account the user did not have. They
+    found out from a raw SDK TypeError mid-job.
+    """
+
+    CODEX = {"backend": "codex_cli", "model": "gpt-5.6-sol"}
+
+    def _config(self, tmp_path, roles):
+        import json
+
+        from bp.agents.registry import load_config
+        from bp.paths import Project
+
+        (tmp_path / "nodes").mkdir(exist_ok=True)
+        (tmp_path / "bp.yaml").write_text(
+            json.dumps({"agents": {"roles": roles}}), encoding="utf-8"
+        )
+        return load_config(Project(tmp_path))
+
+    def test_an_unconfigured_role_inherits_the_configured_backend(self, tmp_path):
+        """The five original roles configured; the four new ones must follow them,
+        not a built-in default with a different provider."""
+        config = self._config(
+            tmp_path,
+            {r: self.CODEX for r in
+             ("decomposer", "checker", "verifier_a", "verifier_b", "prover")},
+        )
+        for role in ("extractor", "obligation", "confirmer", "auditor"):
+            assert config.role(role).backend == "codex_cli", role
+            assert config.role(role).model == "gpt-5.6-sol", role
+
+    def test_the_provenance_says_where_each_came_from(self, tmp_path):
+        config = self._config(
+            tmp_path,
+            {r: self.CODEX for r in
+             ("decomposer", "checker", "verifier_a", "verifier_b", "prover")},
+        )
+        assert config.provenance["checker"] == "bp.yaml"
+        assert config.provenance["obligation"] == "inherited from checker"
+        assert config.provenance["confirmer"] == "inherited from verifier_a"
+        assert config.provenance["extractor"] == "inherited from prover"
+        assert config.provenance["auditor"] == "inherited from checker"
+
+    def test_an_explicitly_configured_role_is_not_overridden(self, tmp_path):
+        config = self._config(
+            tmp_path,
+            {"checker": self.CODEX,
+             "obligation": {"backend": "claude_api", "model": "claude-sonnet-5"}},
+        )
+        assert config.role("obligation").backend == "claude_api"
+        assert config.provenance["obligation"] == "bp.yaml"
+
+    def test_an_empty_config_falls_back_to_the_built_in_defaults(self, tmp_path):
+        """With nothing configured there is nothing to inherit from, and the built-in
+        default is the only answer available."""
+        config = self._config(tmp_path, {})
+        assert config.role("auditor").backend == "claude_api"
+        assert config.provenance["auditor"] == "built-in default"
+
+    def test_every_role_resolves_no_matter_how_partial_the_file(self, tmp_path):
+        from bp.agents.registry import ROLES
+
+        config = self._config(tmp_path, {"decomposer": self.CODEX})
+        for role in ROLES:
+            assert config.role(role) is not None, role
+
+    def test_describe_carries_the_provenance_through(self, tmp_path):
+        from bp.agents.log import NullLog
+        from bp.agents.registry import Registry
+        from bp.paths import Project
+
+        config = self._config(
+            tmp_path,
+            {r: self.CODEX for r in
+             ("decomposer", "checker", "verifier_a", "verifier_b", "prover")},
+        )
+        rows = Registry(Project(tmp_path), config, log=NullLog()).describe()
+        sources = {row[0]: row[5] for row in rows}
+        assert sources["obligation"] == "inherited from checker"
+        assert sources["prover"] == "bp.yaml"
+
+
+class TestClaudeApiCredentials:
+    """`bp agents` used to report `usable: yes` for the Anthropic backend on a machine
+    with no key at all — and that column's whole job is to tell you a backend cannot
+    run *before* you spend a click. Saying yes and failing later is worse than not
+    having it."""
+
+    def _backend(self):
+        from bp.agents.claude_api import ClaudeAPIBackend
+
+        return ClaudeAPIBackend("claude-opus-5", role="auditor")
+
+    def test_no_credentials_is_not_usable(self, monkeypatch):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+        ok, reason = self._backend().available()
+        assert ok is False
+        assert "ANTHROPIC_API_KEY" in reason
+        assert "bp.yaml" in reason
+
+    def test_a_key_makes_it_usable(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-real")
+        ok, reason = self._backend().available()
+        assert ok is True and reason == ""
+
+    def test_the_lazy_auth_TypeError_becomes_an_actionable_error(self, monkeypatch):
+        """The SDK resolves credentials at *request* time and signals their absence
+        with a bare TypeError, not AuthenticationError — so it escaped every handler
+        and surfaced as `TypeError: "Could not resolve authentication method..."`,
+        which reads like a bug in Albatross rather than something the user can fix."""
+        from bp.agents.base import BackendUnavailable
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+        with pytest.raises(BackendUnavailable) as exc:
+            self._backend().invoke("system", "user", 5)
+        assert "no Anthropic credentials" in str(exc.value)
+        assert "bp agents" in str(exc.value)
+
+    def test_an_unrelated_TypeError_is_not_swallowed(self, monkeypatch):
+        """Mapping every TypeError to "no credentials" would hide real bugs."""
+        import anthropic
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-real")
+
+        class Boom:
+            def stream(self, **kwargs):
+                raise TypeError("something else entirely")
+
+        backend = self._backend()
+        monkeypatch.setattr(
+            anthropic.Anthropic, "messages", property(lambda self: Boom())
+        )
+        with pytest.raises(TypeError, match="something else entirely"):
+            backend.invoke("system", "user", 5)

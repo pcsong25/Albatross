@@ -4,7 +4,13 @@
 # a model in its code, only a role, so changing one is a one-line edit here.
 #
 # `bp agents` prints this table and says which backends can actually run on this
-# machine. Start there.
+# machine, and — in the `from` column — whether each role came from this file, was
+# inherited from another role, or fell back to a built-in default. Start there.
+#
+# If Albatross adds a role after you created this file, it does NOT jump to a built-in
+# default: it copies the nearest role you did configure, so your project never moves to
+# a different provider behind your back. `bp agents` says which roles that happened to;
+# add them here to choose for yourself.
 #
 # ---------------------------------------------------------------------------
 # Backends

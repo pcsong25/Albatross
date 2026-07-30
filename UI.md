@@ -465,8 +465,19 @@ and its own limits:
   not "there is nothing". Nothing in the system blocks on its verdict.
 
 ### 5.8 Agents
-Role → backend → model → usable. **The only place that tells you a backend cannot
-run before you spend a click on it.** Also the budget caps, the number of logged
+Role → backend → model → **from** → usable. **The only place that tells you a backend
+cannot run before you spend a click on it.**
+
+The `from` column exists because a role can be configured without you doing it:
+
+| `from` | Means |
+|---|---|
+| `bp.yaml` | you configured it |
+| `inherited from <role>` | this role was added to Albatross after your `bp.yaml` was written, so it copied the nearest role you did configure — your project is not moved to another provider behind your back |
+| `built-in default` | nothing to inherit from, so the shipped default applies. Worth checking: those are Anthropic, and without a key the role cannot run |
+
+Two warning boxes appear when they apply: one naming every role that cannot run here,
+and one naming every role that is not in your `bp.yaml`. Also the budget caps, the number of logged
 calls, and `Running with --replay` when the server resolves every call from the log
 and can neither reach a provider nor cost money.
 

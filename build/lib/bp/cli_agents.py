@@ -74,17 +74,36 @@ def register(app: typer.Typer) -> None:
         """Which model plays which role, and whether it can run here."""
         registry = _registry(root)
         table = Table(box=None, pad_edge=False, header_style="bold")
-        for column in ("role", "backend", "model", "usable", "note"):
+        for column in ("role", "backend", "model", "from", "usable", "note"):
             table.add_column(column, overflow="fold")
-        for role, backend, model, ok, reason in registry.describe():
+        rows = registry.describe()
+        for role, backend, model, ok, reason, source in rows:
             table.add_row(
                 role,
                 backend,
                 model,
+                source if source == "bp.yaml" else f"[yellow]{source}[/]",
                 "[green]yes[/]" if ok else "[red]no[/]",
                 reason,
             )
         console.print(table)
+        # A role nobody configured is a role the user should hear about, not discover
+        # from a provider error three commands later.
+        unconfigured = [r for r, *_rest, source in rows if source != "bp.yaml"]
+        if unconfigured:
+            console.print()
+            console.print(
+                f"[yellow]note[/] {len(unconfigured)} role(s) are not in your "
+                "bp.yaml: " + ", ".join(unconfigured) + ". They were filled in as "
+                "shown in the `from` column. Add them explicitly to choose."
+            )
+        broken = [r for r, _b, _m, ok, *_rest in rows if not ok]
+        if broken:
+            console.print(
+                f"[red]warning[/] {len(broken)} role(s) cannot run here: "
+                + ", ".join(broken)
+                + ". Any job that needs one will fail."
+            )
         log = CallLog.for_project(registry.project)
         console.print()
         console.print(f"call log: {len(log)} recorded call(s) in {log.directory}")

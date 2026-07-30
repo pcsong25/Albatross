@@ -368,8 +368,17 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
             "roles": [
-                {"role": r, "backend": b, "model": m, "usable": ok, "note": note}
-                for r, b, m, ok, note in registry.describe()
+                {
+                    "role": r,
+                    "backend": b,
+                    "model": m,
+                    "usable": ok,
+                    "note": note,
+                    # Where this role's backend came from. A role the user never
+                    # configured is a role they should be told about.
+                    "from": source,
+                }
+                for r, b, m, ok, note, source in registry.describe()
             ],
             "budget": registry.config.budget.model_dump(),
             "calls_logged": len(CallLog.for_project(project)),
