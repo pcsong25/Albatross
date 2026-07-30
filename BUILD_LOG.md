@@ -806,3 +806,48 @@ definition asserts nothing — and it reads exactly like a citation that works.
 thought that closed it. It closed one layer of four. The user's framing — *a logic
 hole under the whole system* — was the correct unit of analysis, and mine (*a missing
 check*) was not.
+
+### Refer, never assume
+
+The user refined the rule, and the refinement is the mathematics:
+
+> A child could refer its parent's equation, but it can never use it as a fact.
+> Otherwise a logic loop occurs.
+
+I had `XRF003` warning generically about upward citations, reasoning that they resolve
+correctly so the cost is structural. Right about *naming*, wrong about *consuming*. A
+child that takes a fact from its parent is in a loop with no bottom — the parent's
+proof rests on the child — and the `children` relation stays acyclic throughout, so
+nothing in the graph shows it.
+
+Whether a particular reference names or assumes is a fact about the prose, so the split
+is the division of labour this system already runs on: `xref.relation` enumerates the
+loop candidates deterministically, and `prompts/verify_circularity.md` judges each one
+with a single question. `CircularityVerdict.used_as_fact` rather than `entails`, because
+the healthy answer is a **no** — and because asking a loop candidate the *support*
+question gets "yes, the parent asserts it", which is true and exactly the wrong answer.
+
+The rule is now stated in four places, one per actor that needs it: `XRF003`'s hint, the
+shared role context, the decomposer's prompt (so it does not write such a child), and
+the whole-proof taxonomy as `circular`.
+
+Also, as asked: the Preamble sheet now shows what the renderer adds — every package
+with its options, which are optional, the theorem environments, the `\bp*` macros, and
+the generated preamble in full. `bp preamble --defaults` prints the same.
+
+```
+pytest -q       558 passed
+```
+
+**What surprised me.** Two things, both about where text ends up.
+
+`Flag.why` is rewritten by the confirmation pass, which is correct — it sharpens the
+objection. But for a circular citation the load-bearing half is *which node rests on
+which*, a graph fact a model restating the objection will not reproduce. So that half
+moved to `Flag.context`, which confirmation does not touch and which reaches the
+browser and the document.
+
+And the defaults list nearly shipped wrong in a way that would have been funny: the
+template documents the collisions it avoids, and those comments quote
+`\newtheorem{lemma}{Lemma}` — so the first version of the extractor reported `lemma`
+twice. A tool for avoiding collisions that invents one.

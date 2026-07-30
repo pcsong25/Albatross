@@ -187,13 +187,42 @@ def index_for(graph) -> Index:
 # --- the checks ---------------------------------------------------------------
 
 
-def in_scope(graph, node_id: str) -> set[str]:
-    """The nodes whose labels ``node_id`` may legitimately reference.
+#: How a citation's target sits relative to the citing node. The distinction is the
+#: whole content of the circularity rule, so it is a named thing rather than an
+#: `if` buried in a check.
+SELF = "self"
+DESCENDANT = "descendant"
+ANCESTOR = "ancestor"
+UNRELATED = "unrelated"
 
-    Itself, plus every node it cites, transitively. *Not* its ancestors: a lemma
-    whose text depends on the argument that uses it is not a lemma the verifier can
-    read on its own, and the verifier is given exactly its cited children and
-    nothing else.
+
+def relation(graph, citing: str, target: str) -> str:
+    """Where ``target`` sits relative to ``citing`` in the children relation."""
+    if citing == target:
+        return SELF
+    if target in graph.descendants(citing):
+        return DESCENDANT
+    if target in graph.ancestors(citing):
+        return ANCESTOR
+    return UNRELATED
+
+
+def in_scope(graph, node_id: str) -> set[str]:
+    """The nodes whose labels ``node_id`` may cite **as facts**.
+
+    Itself, plus every node it cites, transitively.
+
+    Not its ancestors, and the reason is a logic loop rather than a matter of taste.
+    A parent's proof cites the child; if the child then draws a *fact* from the
+    parent, each is resting on the other and neither is established. A child may
+    still **refer** to a parent's equation — to name the object under discussion, to
+    say which equation is meant — because identifying something is not the same as
+    assuming it. What it may never do is use it as a premise.
+
+    That split cannot be made deterministically: whether a reference identifies or
+    asserts is a fact about the prose. So code enumerates the loop *candidates*
+    (:func:`reference_obligations_for`, ``relation == ANCESTOR``) and an agent judges
+    each one — the usual division of labour here.
     """
     return {node_id} | graph.descendants(node_id)
 
@@ -260,15 +289,23 @@ def check_xref(graph, index: Index | None = None) -> list[Diagnostic]:
                         "XRF003",
                         node,
                         f"`\\{ref.command}{{{ref.name}}}` points at `{label.node}`, "
-                        "which is a node that cites this one",
-                        hint="this resolves and prints the right number, but two "
-                        "things follow. The document reads dependencies-first, so the "
-                        "reference points *forward* to something the reader has not "
-                        "met. And the verifier reads this node with its own children "
-                        "as assumptions and no parent context, so it will not know "
-                        "what the reference means. The fix that removes both: move "
-                        "the shared display or definition into its own node — a "
-                        "`definition` reads well — and cite that node from both.",
+                        "which is a node that cites this one — so it may name what is "
+                        "meant, but must not be used as a fact",
+                        hint="**a child may refer to a parent's equation; it may never "
+                        "use it as a premise.** `"
+                        + label.node
+                        + "`'s proof rests on this node, so if this node also draws a "
+                        "fact from that statement, each rests on the other and neither "
+                        "is established. Naming the object under discussion is fine; "
+                        "assuming what it asserts is a loop. Whether this particular "
+                        "reference names or assumes is judged per citation at "
+                        "`--level standard`. Two further costs even when it only "
+                        "names: the document reads dependencies-first so the reference "
+                        "points forward, and the verifier reads this node with no "
+                        "parent context, so it cannot see what the reference means. "
+                        "The fix that removes all three — move the shared display into "
+                        "its own node, a `definition` reads well, and cite that node "
+                        "from both.",
                     )
                 )
             else:
@@ -498,6 +535,11 @@ def reference_obligations_for(node: Node, graph, index: Index | None = None) -> 
                     "command": m.group(1),
                     "target": label.node,
                     "target_section": label.section.lower(),
+                    # Which question this citation has to answer. An ancestor is a
+                    # loop candidate and gets asked whether it is used as a fact; a
+                    # descendant is a legitimate citation and gets asked whether the
+                    # cited text supports the use.
+                    "relation": relation(graph, node.id, label.node),
                     "applied_to": "",
                     # What the citing text claims *from* the reference.
                     "needed": _sentence_around(text, m.start()),
@@ -514,6 +556,7 @@ def reference_obligations_for(node: Node, graph, index: Index | None = None) -> 
                         "parent": record["parent"],
                         "reference": name,
                         "target": record["target"],
+                        "relation": record["relation"],
                         "needed": canonical_statement(record["needed"]),
                         "source_text": canonical_statement(record["source_text"]),
                     }
@@ -530,7 +573,7 @@ def all_reference_obligations(graph) -> list[dict]:
     return out
 
 
-def obligations_note(index: Index, node_id: str) -> str:
+def obligations_note(index: Index, node_id: str, graph=None) -> str:
     """Context for a role: which cross-node references this node's text makes.
 
     Given to the verifier and the extractor, because a proof containing
@@ -541,25 +584,46 @@ def obligations_note(index: Index, node_id: str) -> str:
     if not mine:
         return ""
     lines = ["## Cross-references in this node's text", ""]
+    upward = False
     for ref in mine:
         label = index.define(ref.name)
         if label is None:
             lines.append(
                 f"- `\\{ref.command}{{{ref.name}}}` — **refers to nothing that "
-                "exists in this project.** Treat it as a gap, not as a fact."
+                "exists in this project.** Treat it as a gap, not as a fact: whatever "
+                "it was meant to supply has not been supplied."
             )
         elif label.node == node_id:
             lines.append(f"- `\\{ref.command}{{{ref.name}}}` — defined in this node.")
         else:
-            lines.append(
-                f"- `\\{ref.command}{{{ref.name}}}` — defined in the "
-                f"{label.section.lower()} of `{label.node}`."
-            )
+            rel = relation(graph, node_id, label.node) if graph is not None else UNRELATED
+            where = f"the {label.section.lower()} of `{label.node}`"
+            if rel == ANCESTOR:
+                upward = True
+                lines.append(
+                    f"- `\\{ref.command}{{{ref.name}}}` — defined in {where}, which is "
+                    "a node **above** this one: its proof cites this node."
+                )
+            else:
+                lines.append(f"- `\\{ref.command}{{{ref.name}}}` — defined in {where}.")
+    if upward:
+        lines += [
+            "",
+            "**A reference pointing upward may name what is meant; it may never be "
+            "used as a fact.** The node above rests on this one, so drawing a premise "
+            "or a step from what it asserts makes each depend on the other and "
+            "establishes neither. If this node needs that content in order to *say* "
+            "what it says, the content belongs in its own node, cited by both.",
+        ]
     return "\n".join(lines)
 
 
 __all__ = [
+    "ANCESTOR",
     "CONTEXT_CHARS",
+    "DESCENDANT",
+    "SELF",
+    "UNRELATED",
     "Index",
     "all_reference_obligations",
     "LABEL_RE",
@@ -575,6 +639,7 @@ __all__ = [
     "obligations_note",
     "reference_obligations_for",
     "refs_in",
+    "relation",
     "resolved_numbers",
     "summarise",
 ]

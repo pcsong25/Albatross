@@ -119,6 +119,25 @@ class BatchVerdict(BaseModel):
     )
 
 
+class CircularityVerdict(BaseModel):
+    """Is a citation of an ancestor being *used* or merely *named*?
+
+    Deliberately not phrased as ``entails``, which would read backwards: the healthy
+    answer here is a **no**. Naming the object under discussion is fine; consuming
+    what the ancestor asserts is a loop with no bottom.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    used_as_fact: bool = Field(
+        description="true if the citing passage consumes something the cited "
+        "statement asserts — as a hypothesis, a step, a bound, or a conclusion. "
+        "false if it only names the object, fixes notation, or orients the reader."
+    )
+    why: str = Field(description="one or two sentences, quoting what is taken if any")
+    confidence: str = Field(default="medium", description="low | medium | high")
+
+
 class Objection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -155,15 +174,24 @@ class Flag:
     kind: str
     why: str
     raised_by: str
+    #: A structural fact about the graph that the objection depends on — which node
+    #: rests on which, for instance. Kept apart from ``why`` because confirmation
+    #: rewrites ``why`` with its own sharper sentence, and for a circular citation the
+    #: graph fact is the part the reader most needs and the part a model restating the
+    #: objection is least likely to reproduce.
+    context: str = ""
 
     def to_record(self) -> dict[str, Any]:
-        return {
+        record = {
             "kind": self.kind,
             "section": self.section,
             "quote": self.quote,
             "why": self.why,
             "raised_by": self.raised_by,
         }
+        if self.context:
+            record["context"] = self.context
+        return record
 
 
 @dataclass
@@ -182,6 +210,10 @@ class VerifyReport:
     references_checked: int = 0
     references_cached: int = 0
     references_flagged: int = 0
+    #: Citations of an ancestor that the verifier judged to be *used as facts*. A
+    #: loop with no bottom, and counted separately because it is a different failure
+    #: from a citation that merely does not support its use.
+    circular_citations: int = 0
     ledger_claims: int = 0
     ledger_unsourced: int = 0
     ledger_ran: bool = False
@@ -300,6 +332,35 @@ def reference_prompt(record: dict[str, Any]) -> str:
     )
 
 
+def circularity_prompt(record: dict[str, Any]) -> str:
+    """One upward citation, with the loop spelled out.
+
+    The prompt has to state the graph fact, because it is the whole reason the
+    question is being asked and the model cannot see the graph.
+    """
+    return "\n".join(
+        [
+            "## The citation, and why it is being questioned",
+            "",
+            f"`{record['parent']}` cites "
+            f"`\\{record['command']}{{{record['reference']}}}`, which points into the "
+            f"{record['target_section']} of `{record['target']}`.",
+            "",
+            f"**`{record['target']}`'s own proof cites `{record['parent']}`.** So if "
+            f"`{record['parent']}` uses what `{record['target']}` asserts as a fact, "
+            "each rests on the other and neither is established.",
+            "",
+            "**The passage doing the citing** (the reference appears inside it):",
+            "",
+            record["needed"] or "(the passage is empty)",
+            "",
+            f"**What `{record['target']}` says at that point**:",
+            "",
+            record["source_text"] or "(that section is empty)",
+        ]
+    )
+
+
 def batch_prompt(records: list[dict[str, Any]], render) -> str:
     """Several records in one call.
 
@@ -334,7 +395,8 @@ def _check_records(
     render,
     batch: int,
     use_cache: bool,
-) -> tuple[list[tuple[dict[str, Any], ObligationVerdict]], int, list[CallMeta]]:
+    schema: type[BaseModel] = ObligationVerdict,
+) -> tuple[list[tuple[dict[str, Any], Any]], int, list[CallMeta]]:
     """Run one worklist through the mid-tier model. Returns verdicts and cache hits.
 
     The list comes from code, so nothing is skipped because a model failed to
@@ -349,7 +411,7 @@ def _check_records(
     system = context.load_prompt(prompt_name)
     cache = load_cache(project) if use_cache else {}
 
-    out: list[tuple[dict[str, Any], ObligationVerdict]] = []
+    out: list[tuple[dict[str, Any], Any]] = []
     calls: list[CallMeta] = []
     cached_count = 0
     pending: list[dict[str, Any]] = []
@@ -357,7 +419,7 @@ def _check_records(
     for record in records:
         cached = cache.get(record["hash"]) if use_cache else None
         if cached is not None:
-            out.append((record, ObligationVerdict(**cached["verdict"])))
+            out.append((record, schema(**cached["verdict"])))
             cached_count += 1
         else:
             pending.append(record)
@@ -365,10 +427,15 @@ def _check_records(
     size = max(1, int(batch))
     for start in range(0, len(pending), size):
         chunk = pending[start : start + size]
-        if len(chunk) == 1:
-            verdict, meta = agent.complete(system, render(chunk[0]), ObligationVerdict, timeout)
-            calls.append(meta)
-            answers = {chunk[0]["id"]: verdict}
+        if len(chunk) == 1 or schema is not ObligationVerdict:
+            # Batching is only wired for the yes/no entailment shape. A schema with
+            # its own field names would need its own batch envelope, and inventing
+            # one to save a call on the rarest job is a bad trade.
+            answers = {}
+            for record in chunk:
+                verdict, meta = agent.complete(system, render(record), schema, timeout)
+                calls.append(meta)
+                answers[record["id"]] = verdict
         else:
             batched, meta = agent.complete(
                 system, batch_prompt(chunk, render), BatchVerdict, timeout
@@ -559,37 +626,84 @@ def verify_references(
     if not records:
         return report
 
-    verdicts, cached, calls = _check_records(
-        project,
-        records,
-        registry=registry,
-        prompt_name="verify_reference",
-        render=reference_prompt,
-        batch=batch,
-        use_cache=use_cache,
-    )
-    report.references_cached += cached
-    report.references_checked += len(verdicts)
-    report.calls.extend(calls)
-    report.models.setdefault("reference", registry.agent("obligation").model)
+    # Two questions, so two worklists. A citation *down* the graph is a normal
+    # citation: does the cited text support the use? A citation *up* the graph is a
+    # loop candidate: is it being used as a fact at all? Asking the second one the
+    # first question would get "yes, the parent asserts it" — true, and exactly the
+    # wrong answer.
+    upward = [r for r in records if r["relation"] == xref_mod.ANCESTOR]
+    downward = [r for r in records if r["relation"] != xref_mod.ANCESTOR]
 
-    for record, verdict in verdicts:
-        if verdict.entails:
-            report.checked.append(
-                f"citation \\{record['command']}{{{record['reference']}}} "
-                f"-> {record['target']}"
-            )
-        else:
-            report.flags.append(
-                Flag(
-                    source="reference",
-                    section=record["target_section"],
-                    quote=record["needed"][:400],
-                    kind="citation-misuse",
-                    why=verdict.why,
-                    raised_by=f"reference:{report.models.get('reference', '?')}",
+    if downward:
+        verdicts, cached, calls = _check_records(
+            project,
+            downward,
+            registry=registry,
+            prompt_name="verify_reference",
+            render=reference_prompt,
+            batch=batch,
+            use_cache=use_cache,
+        )
+        report.references_cached += cached
+        report.references_checked += len(verdicts)
+        report.calls.extend(calls)
+        report.models.setdefault("reference", registry.agent("obligation").model)
+        for record, verdict in verdicts:
+            if verdict.entails:
+                report.checked.append(
+                    f"citation \\{record['command']}{{{record['reference']}}} "
+                    f"-> {record['target']}"
                 )
-            )
+            else:
+                report.flags.append(
+                    Flag(
+                        source="reference",
+                        section=record["target_section"],
+                        quote=record["needed"][:400],
+                        kind="citation-misuse",
+                        why=verdict.why,
+                        raised_by=f"reference:{report.models.get('reference', '?')}",
+                    )
+                )
+
+    if upward:
+        verdicts, cached, calls = _check_records(
+            project,
+            upward,
+            registry=registry,
+            prompt_name="verify_circularity",
+            render=circularity_prompt,
+            batch=batch,
+            use_cache=use_cache,
+            schema=CircularityVerdict,
+        )
+        report.references_cached += cached
+        report.references_checked += len(verdicts)
+        report.calls.extend(calls)
+        report.models.setdefault("reference", registry.agent("obligation").model)
+        for record, verdict in verdicts:
+            if not verdict.used_as_fact:
+                report.checked.append(
+                    f"citation \\{record['command']}{{{record['reference']}}} "
+                    f"-> {record['target']} names it, does not assume it"
+                )
+            else:
+                report.circular_citations += 1
+                report.flags.append(
+                    Flag(
+                        source="reference",
+                        section=record["target_section"],
+                        quote=record["needed"][:400],
+                        kind="circular-citation",
+                        why=verdict.why,
+                        context=(
+                            f"`{record['target']}`'s proof rests on this node, so using "
+                            f"what `{record['target']}` asserts as a fact here is a loop "
+                            "with no bottom."
+                        ),
+                        raised_by=f"reference:{report.models.get('reference', '?')}",
+                    )
+                )
     return report
 
 
@@ -696,7 +810,8 @@ def confirm(
         user = context.join(
             "## The objection",
             f"- Class: {flag.kind}\n- Section: {flag.section}\n"
-            f"- Quoting: {flag.quote}\n- Why: {flag.why}",
+            f"- Quoting: {flag.quote}\n- Why: {flag.why}"
+            + (f"\n- Structural fact: {flag.context}" if flag.context else ""),
             "## The context it was raised against",
             context.node_block(node, heading="The claim and its proof"),
             context.children_block(graph, node),
@@ -837,6 +952,7 @@ def verify(
             "total": report.references_total,
             "verified": report.references_checked - report.references_flagged,
             "flagged": report.references_flagged,
+            "circular": report.circular_citations,
             "cached": report.references_cached,
         }
         if "references" in jobs and obligations
@@ -949,6 +1065,11 @@ def summarise(report: VerifyReport) -> str:
             f"  citations: {report.references_checked} of "
             f"{report.references_total} checked "
             f"({report.references_cached} from cache)"
+            + (
+                f", {report.circular_citations} CIRCULAR"
+                if report.circular_citations
+                else ""
+            )
         )
     if report.obligations_total or report.obligations_checked:
         lines.append(
@@ -985,6 +1106,7 @@ def summarise(report: VerifyReport) -> str:
 
 __all__ = [
     "BatchVerdict",
+    "CircularityVerdict",
     "Confirmation",
     "Flag",
     "LEVEL_JOBS",
@@ -992,6 +1114,7 @@ __all__ = [
     "ObligationVerdict",
     "ProofVerdict",
     "VerifyReport",
+    "circularity_prompt",
     "claim_prompt",
     "claims_block",
     "confirm",

@@ -800,6 +800,13 @@ async function showDetail(id) {
       const why = el('div', {});
       why.append(mathProse(flag.why || ''));
       box.append(why);
+      if (flag.context) {
+        // A graph fact the objection rests on — which node rests on which. Kept
+        // separate from `why` because confirmation rewrites that sentence.
+        const ctx = el('div', { class: 'small' });
+        ctx.append(mathProse(flag.context));
+        box.append(ctx);
+      }
       if (flag.quote) {
         const quote = el('div', { class: 'quote' });
         quote.append(mathProse(flag.quote));
@@ -1825,6 +1832,58 @@ async function preambleSheet() {
     Object.keys(state.macros).length + ' macro(s) currently in use: ' +
     (Object.keys(state.macros).join(' ') || 'none'));
   body.append(count);
+
+  // What the renderer adds around your file. Shown because you cannot avoid a
+  // collision you cannot see — and because the ordering guarantee ("yours wins") is
+  // only reassuring once you know what it is winning against.
+  body.append(el('h3', { class: 'section' }, 'What the renderer adds'));
+  try {
+    const facts = await api('/api/preamble/defaults');
+    body.append(el('p', { class: 'small muted' },
+      'Your file is injected BEFORE the options and the theorem environments below, ' +
+      'so anything you define or load yourself wins: your \\newtheorem{lemma}, your ' +
+      '\\usepackage[hidelinks]{hyperref}, your own margins. The base packages are ' +
+      'loaded before your file so that \\DeclareMathOperator and friends work in it.'));
+
+    const pkgs = el('div', { class: 'uses' });
+    pkgs.append(el('div', { class: 'child' }, 'Packages'));
+    for (const p of facts.packages) {
+      const row = el('div', { class: 'dis' });
+      row.append(el('span', { class: 'hid' }, p.name));
+      if (p.options) row.append(el('span', { class: 'muted small' }, `[${p.options}]`));
+      if (p.optional) {
+        row.append(el('span', { class: 'muted small' },
+          '  — only if your TeX has it; an unguarded \\usepackage of a missing ' +
+          'package in YOUR file is a hard error'));
+      }
+      pkgs.append(row);
+    }
+    pkgs.append(el('div', { class: 'child' }, 'Theorem environments'));
+    for (const e of facts.environments) {
+      const row = el('div', { class: 'dis' });
+      row.append(el('span', { class: 'hid' }, e.name));
+      row.append(el('span', { class: 'muted small' }, `prints as “${e.printed_as}”, ` +
+        'defined only if you have not defined it yourself'));
+      pkgs.append(row);
+    }
+    pkgs.append(el('div', { class: 'child' }, 'Macros the renderer defines'));
+    pkgs.append(el('div', { class: 'dis' },
+      el('span', { class: 'muted small' },
+        facts.macros.join('  ') + '  — do not redefine these; they draw the status ' +
+        'apparatus and are omitted entirely by --clean')));
+    body.append(pkgs);
+
+    // The generated preamble in full, so nothing is hidden and it can be copied out
+    // to reproduce the build by hand.
+    const details = el('details', {});
+    details.append(el('summary', { class: 'small muted' },
+      'The generated preamble in full, exactly as the document gets it'));
+    details.append(el('pre', { class: 'tex small' }, facts.text));
+    body.append(details);
+  } catch (e) {
+    body.append(el('div', { class: 'warnbox' },
+      'Could not read the renderer defaults: ' + e.message));
+  }
 
   sheet('Preamble', body, [
     { label: 'Cancel', onClick: closeSheet },

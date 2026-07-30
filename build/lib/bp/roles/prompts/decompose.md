@@ -62,6 +62,28 @@ math-mode fragment — write `s > 3/2`, not `$s > 3/2$`.
 For **the parent**: a reduction proof in LaTeX prose that cites each child by
 its slug in backticks, and a **complete `uses` table**.
 
+# Children must be readable on their own
+
+Each child you propose is verified **independently**, by a reader given that child's
+statement, its own cited lemmas, and nothing else — not this node, not its siblings.
+Two consequences, and the second is a hard rule.
+
+**Every hypothesis a child needs must be stated on that child.** Do not write a child
+whose hypotheses are "as above" or "in the setting of the theorem". Repeat them. A
+child whose conditions live somewhere else has no conditions at all as far as anything
+in this system can tell.
+
+**A child may refer to this node's equations; it may never use one as a fact.**
+Naming the object under discussion is fine — "the solution $\omega$ of the equation
+in question". Drawing a premise or a step from what *this* node asserts is a loop with
+no bottom, because this node's proof rests on the child. If a child genuinely needs a
+display or a definition that currently lives in this node's statement, **propose it as
+a separate child** — a `definition` role reads well — and let both this node and the
+other children cite it. That is the correct shape, and it is cheap.
+
+The same goes for any `\ref` or `\eqref` you write: it must point at something that
+exists. If you find yourself wanting to write "see Section …", you want a node.
+
 # The `uses` table — read this twice
 
 For every hypothesis of every child you cite, name where it comes from. One of:

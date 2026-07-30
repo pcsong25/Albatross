@@ -343,10 +343,20 @@ with `hidelinks`, or set your own `geometry` margins, yours is what the document
 uses. (This was not always true, and a pasted-in preamble used to fail on the
 first try with "Command \lemma already defined".)
 
-**What the renderer loads for you**, so you do not have to: `amsmath`, `amssymb`,
-`amsthm`, `mathtools`, `mathrsfs`, `fontenc`, `geometry`, `xcolor`, `hyperref`
-always, and `bbm`, `enumitem`, `float` when your installation has them. Loading
-any of these again yourself is harmless.
+**See exactly what the renderer adds.** The **Preamble** sheet lists it under *What
+the renderer adds* — every package with its options, which ones are loaded only if
+your TeX has them, the five theorem environments with their printed names, and the
+macros it defines — plus the whole generated preamble in full, so nothing is hidden.
+`bp preamble --defaults` prints the same thing.
+
+It is read from the template rather than written down, so it cannot go out of date.
+Use it to see what you are overriding: you cannot avoid a collision you cannot see.
+
+Currently that is `amsmath`, `amssymb`, `amsthm`, `mathtools`, `mathrsfs`, `fontenc`,
+`geometry`, `xcolor` and `hyperref` always, plus `bbm`, `enumitem` and `float` when
+installed. Loading any of them again yourself is harmless — and your options win.
+**Do not redefine `\bpmark`, `\bphyp`, `\bpaudit` or `\bpboxreg`**: those draw the
+status apparatus.
 
 ### Missing packages, which is the commonest first failure
 
@@ -418,8 +428,30 @@ be worse than showing none.
 
 ### Can a child reference its parent's equation?
 
-Yes, and it will warn (`XRF003`). It works — the number is right — and it costs you
-two things worth knowing:
+Yes — **to name something, never to use as a fact.** That distinction is the whole
+rule, and it is not stylistic:
+
+> The parent's proof cites the child. If the child then takes a *fact* from the
+> parent's statement, each rests on the other and **neither is established** — and
+> nothing in the graph will show it, because every step looks locally fine.
+
+**Referring is fine.** "the solution $\omega$ of that equation", "with $\kappa$ as in
+\eqref{eq:kappa}", "compare \eqref{eq:main}". You are saying *which* object is meant.
+
+**Assuming is a loop.** "let $\omega_0$ be as in \eqref{eq:hyp}" where the conditions
+on $\omega_0$ exist only there. "by \eqref{eq:riccati}, $z$ grows superlinearly."
+"since $\|u\| \le C$ by \eqref{eq:bound}." You are consuming what the parent
+asserts.
+
+The test: **if the parent's statement were deleted, would this node still say the same
+thing and would its argument still stand?** If not, it is a fact, and it is a loop.
+
+Whether a particular reference names or assumes is a fact about your prose, so it is
+judged per citation at `--level standard` and reported as `circular-citation` — with
+the graph fact spelled out, so you can see which node rests on which. A `\ref`
+pointing upward also gets `XRF003`, which warns and states the rule.
+
+Two further costs even when it only names:
 
 1. **The document reads dependencies-first**, so a child prints *before* its
    parent. A child referencing the parent's equation points forward, to something
@@ -428,9 +460,9 @@ two things worth knowing:
    parent context at all.** It will not know what the reference means, and a model
    that does not know invents something.
 
-The fix that removes both, and the one to reach for when you find yourself writing
-"in the setting of Section …": **put the shared thing in its own node and cite it
-from both.** A `definition` node holding the function space, the equation, or the
+The fix that removes all three, and the one to reach for whenever you find yourself
+writing "in the setting of Section …": **put the shared thing in its own node and cite
+it from both.** A `definition` node holding the function space, the equation, or the
 standing notation, listed in the `children` of everyone who needs it. Then the
 graph records the dependency, the verifier is handed it automatically, and it prints
 before everything that uses it.

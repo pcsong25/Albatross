@@ -1212,3 +1212,85 @@ and the entire point is that the citations are now *enumerated*.
 elliptic regularity" — is not a `\ref` and is not enumerated here. It reaches the
 system only via the extractor's ledger, which is the ledger's known soft spot.
 `UPGRADE.md` carries the row.
+
+---
+
+## D056 — Refer, never assume: an upward citation is judged, not banned
+
+**Date** 2026-07-30 · **Milestone** L3 (friction log)
+
+The user's rule, and it is the right one:
+
+> A child could refer its parent's equation, but it can never use it as a fact.
+> Otherwise a logic loop occurs.
+
+This sharpens D051. I had `XRF003` warning generically about ancestor references, on
+the grounds that they resolve correctly and the cost is structural. That was right
+about *referring* and wrong about *assuming*: a child consuming what its parent
+asserts is not poor structure, it is a loop with no bottom, and the `children`
+relation stays acyclic throughout so nothing in the graph shows it.
+
+**Decision: code enumerates the loop candidates, an agent judges each one.**
+
+`xref.relation` classifies every citation as `self` / `descendant` / `ancestor` /
+`unrelated` — pure graph structure. Every `ancestor` citation becomes an obligation
+answered against `prompts/verify_circularity.md`, which asks only whether the citing
+passage *consumes* what the cited statement asserts or merely names what is meant.
+`used_as_fact: true` becomes a `circular-citation` flag, counted as
+`references.circular`, and `implied_status` refuses `verified` while any exists.
+
+**Why not simply ban upward citations.** Because the user is right that referring is
+legitimate, and a check that forbade "the solution $\omega$ of that equation" would be
+wrong often enough to be overruled by habit — at which point the *real* loops go
+through too.
+
+**Why a separate schema.** `CircularityVerdict.used_as_fact` rather than reusing
+`ObligationVerdict.entails`, which reads backwards here: the healthy answer is a
+**no**. And asking a loop candidate the support question — "does the cited text give
+what this passage uses it for" — gets "yes, the parent asserts it", which is true and
+exactly the wrong answer. Two different questions need two prompts.
+
+**Why the graph fact lives in `Flag.context`.** Confirmation rewrites `why` with its
+own sentence, and a model restating a circularity objection is the least likely thing
+to reproduce *which node rests on which* — which is the part the reader needs. So the
+structural half is a separate field that confirmation does not touch, and it reaches
+the browser and the rendered document.
+
+**Batching is not wired for this job.** `_check_records` batches only the yes/no
+entailment shape; a schema with its own field names would need its own batch envelope,
+and inventing one to save a call on the rarest job is a bad trade.
+
+**To reverse.** Promote a `used_as_fact` verdict to a deterministic ban on ancestor
+citations, and provide `bp hoist` first — without it the rule is unaffordable.
+
+---
+
+## D057 — The generated preamble is shown to the user, extracted not listed
+
+**Date** 2026-07-30 · **Milestone** L3 (friction log)
+
+Requested: *"To avoid conflicting packages, please list all the default/environment
+preamble in the preamble session on the UI as well so that the user can edit all of
+them to ensure consistency."*
+
+**Decision.** `render.preamble_facts` reports every package with its options and
+whether it is `\IfFileExists`-guarded, the theorem environments with their printed
+names, and the macros the renderer defines. Served at
+`GET /api/preamble/defaults`, shown in the Preamble sheet beside the editable file,
+and available as `bp preamble --defaults`.
+
+**Extracted from the rendered template, never listed by hand.** A hand-written list
+drifts from the template on the first change, and a list the user cannot trust is
+worse than no list — they would edit against it and hit a collision anyway.
+`default_preamble` renders the real template with an empty project preamble and
+returns everything before `\begin{document}`, so it is exactly what a document gets.
+
+**Comments are stripped before scanning.** The template documents the collisions it
+avoids, and those comments quote `\newtheorem{lemma}{Lemma}`; an unfiltered scan
+reported it as a real definition and listed `lemma` twice. A tool for avoiding
+collisions that invents one is worse than useless.
+
+**Not editable, and that is the point.** Their file is injected *before* the options
+and the theorem environments (D-ordering, `ARCHITECTURE.md` §6b), so anything they
+load or define wins — the display exists so they know what they are overriding, not so
+they can fork the renderer's preamble and have it drift.

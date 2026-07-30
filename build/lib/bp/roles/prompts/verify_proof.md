@@ -20,6 +20,7 @@ wrong. The classes of error worth your attention:
 | `uniformity` | A constant treated as uniform in something it depends on |
 | `unjustified-limit` | An interchange of limits, a passage to the limit, or a convergence asserted without justification |
 | `counterexample` | The statement itself appears false; give the witness |
+| `circular` | A step draws a fact from something whose own proof needs this node |
 
 For each objection give the section (`statement` or `proof`), the exact quoted
 sentence or display it applies to, the class, and why. An objection without a
@@ -34,6 +35,11 @@ pass re-reads each objection with its surrounding context and drops the ones
 that dissolve, so a finding you are unsure about costs little. Silence about a
 real gap costs a great deal.
 
-What not to report: notation preferences, missing detail you could supply
-yourself in a line, the absence of hypotheses that are stated on the node rather
-than repeated in the proof, or the fact that a cited lemma is itself unproved.
+If the context lists a cross-reference pointing at a node **above** this one, read
+that step carefully: naming the object it refers to is fine, but taking a premise or a
+step from what that node asserts is circular — its proof rests on this one. Report it
+as `circular`.
+
+What not to report: notation preferences, missing detail you could supply yourself in
+a line, the absence of hypotheses that are stated on the node rather than repeated in
+the proof, or the fact that a cited lemma is itself unproved.

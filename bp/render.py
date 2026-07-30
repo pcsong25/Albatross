@@ -208,8 +208,16 @@ def _mark_for(node: Node, graph) -> dict[str, str] | None:
     elif status == OPEN:
         text = "no proof yet"
     elif status == BLOCKED_OBJECTION:
-        why = next((f.why for f in node.flags if f.why), "")
-        text = "a verifier raised an objection" + (f" --- {prose(why)}" if why else "")
+        first = next((f for f in node.flags if f.why), None)
+        why = (first.why if first else "") or ""
+        # The structural half of a circular-citation objection — which node rests on
+        # which — is the part a reader of the document most needs.
+        context = (getattr(first, "context", "") or "") if first else ""
+        text = "a verifier raised an objection"
+        if why:
+            text += f" --- {prose(why)}"
+        if context:
+            text += f" {prose(context)}"
     else:
         text = escape(status)
     return {"colour": colour, "label": label, "text": text}
@@ -469,6 +477,86 @@ def _environment() -> Environment:
         undefined=StrictUndefined,
         keep_trailing_newline=True,
     )
+
+
+#: Anything the generated preamble does that a user's own preamble could collide
+#: with, so the Preamble editor can show it. Extracted from the rendered template
+#: rather than listed by hand — a hand-written list is a list that goes stale, and
+#: the whole point is that the user can trust what they are shown.
+_USEPACKAGE_RE = re.compile(r"\\usepackage(?:\[([^\]]*)\])?\{([^}]*)\}")
+#: LaTeX comments have to go before any of this runs: the template *documents* the
+#: collisions it avoids, and those comments quote `\newtheorem{lemma}{Lemma}`, which
+#: an unfiltered scan reported as a real definition.
+_TEX_COMMENT_RE = re.compile(r"(?<!\\)%.*$", re.M)
+_PASSOPTIONS_RE = re.compile(r"^\s*\\PassOptionsToPackage\{([^}]*)\}\{([^}]*)\}", re.M)
+_NEWTHEOREM_RE = re.compile(r"\\newtheorem\{([^}]*)\}(?:\[[^\]]*\])?\{([^}]*)\}")
+_DEFINES_RE = re.compile(
+    r"\\(?:long\\)?(?:def|newcommand|renewcommand|providecommand|newenvironment|"
+    r"newsavebox)\s*\\?\{?(\\[A-Za-z@]+)"
+)
+
+
+def default_preamble(clean: bool = False) -> str:
+    """The preamble the renderer generates, with the user's own part omitted.
+
+    Rendered from the real template with an empty project preamble, so it is exactly
+    what a document gets and cannot drift from it.
+    """
+    template = _environment().get_template("document.tex.j2")
+    text = template.render(
+        title="", preamble="", date="", clean=clean,
+        certificate={"headline": "", "support_items": [], "why": "", "counts": ""},
+        entries=[], appendix=[],
+    )
+    marker = "\\begin{document}"
+    return text.split(marker)[0].rstrip() if marker in text else text
+
+
+def preamble_facts(clean: bool = False) -> dict[str, object]:
+    """What the generated preamble loads and defines, for the Preamble editor.
+
+    A user pasting in their paper's preamble needs to know what they are landing on
+    top of. Their file is injected *before* the options and the theorem environments,
+    so theirs wins — but "yours wins" is only reassuring if you can see what it is
+    winning against.
+    """
+    text = default_preamble(clean=clean)
+    live = _TEX_COMMENT_RE.sub("", text)
+
+    options: dict[str, list[str]] = {}
+    for m in _PASSOPTIONS_RE.finditer(live):
+        options.setdefault(m.group(2).strip(), []).append(m.group(1).strip())
+
+    packages: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for m in _USEPACKAGE_RE.finditer(live):
+        for name in (n.strip() for n in m.group(2).split(",")):
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            opts = [o for o in [(m.group(1) or "").strip()] if o]
+            opts.extend(options.get(name, []))
+            packages.append(
+                {
+                    "name": name,
+                    "options": ", ".join(o for o in opts if o),
+                    # `\IfFileExists`-guarded loads degrade instead of failing, which
+                    # is the difference between a nicer document and no document.
+                    "optional": f"\\IfFileExists{{{name}.sty}}" in live,
+                }
+            )
+
+    environments = [
+        {"name": m.group(1), "printed_as": m.group(2)}
+        for m in _NEWTHEOREM_RE.finditer(live)
+    ]
+    macros = sorted({m.group(1) for m in _DEFINES_RE.finditer(live)})
+    return {
+        "text": text,
+        "packages": packages,
+        "environments": environments,
+        "macros": macros,
+    }
 
 
 def document(

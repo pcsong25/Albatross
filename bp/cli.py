@@ -580,6 +580,11 @@ def new(
 @app.command()
 def preamble(
     file: Optional[Path] = typer.Option(None, "--from", help="replace it with this file"),
+    defaults: bool = typer.Option(
+        False,
+        "--defaults",
+        help="show what the renderer loads and defines, so you can avoid collisions",
+    ),
     root: Optional[Path] = typer.Option(None, "--root"),
 ) -> None:
     """Show, or replace, the project's LaTeX preamble (preamble.tex).
@@ -588,6 +593,29 @@ def preamble(
     agent as context, and used by the browser to typeset your notation.
     """
     project = _project(root)
+    if defaults:
+        facts = render_mod.preamble_facts()
+        console.print(Text("packages the renderer loads", style="bold"))
+        for pkg in facts["packages"]:
+            opts = f"[{pkg['options']}]" if pkg["options"] else ""
+            tail = "  (only if installed)" if pkg["optional"] else ""
+            console.print(Text(f"  {pkg['name']}{opts}{tail}"))
+        console.print()
+        console.print(Text("theorem environments", style="bold"))
+        for env in facts["environments"]:
+            console.print(
+                Text(f"  {env['name']} — prints as \u201c{env['printed_as']}\u201d, "
+                     "defined only if you have not")
+            )
+        console.print()
+        console.print(Text("macros it defines (do not redefine)", style="bold"))
+        console.print(Text("  " + "  ".join(facts["macros"])))
+        console.print()
+        console.print(
+            "[dim]Your preamble.tex is injected BEFORE the options and the theorem "
+            "environments, so anything you load or define yourself wins.[/]"
+        )
+        return
     if file is None:
         text = ops.read_preamble(project)
         console.print(Text(text) if text else "[dim]no preamble.tex in this project[/]")

@@ -263,9 +263,11 @@ class VerificationRecord(BaseModel):
     ledger: dict[str, int] = Field(default_factory=dict)
     #: ``{total, verified, flagged, cached}``
     obligations: dict[str, int] = Field(default_factory=dict)
-    #: ``{total, verified, flagged, cached}`` over cross-node citations. A citation
-    #: is as load-bearing as a hypothesis: the failure that motivated this block was
-    #: a statement citing a section nobody had written.
+    #: ``{total, verified, flagged, circular, cached}`` over cross-node citations. A
+    #: citation is as load-bearing as a hypothesis: the failure that motivated this
+    #: block was a statement citing a section nobody had written. ``circular`` counts
+    #: the worse case — a citation of an ancestor used as a *fact*, which is a loop
+    #: with no bottom rather than merely a weak step.
     references: dict[str, int] = Field(default_factory=dict)
     #: panel role -> ``no_objection`` | ``objection_confirmed`` |
     #: ``objection_withdrawn`` | ``did_not_answer``
@@ -294,6 +296,10 @@ class VerificationRecord(BaseModel):
     @property
     def flagged_references(self) -> int:
         return int(self.references.get("flagged", 0))
+
+    @property
+    def circular_citations(self) -> int:
+        return int(self.references.get("circular", 0))
 
     @property
     def confirmed_objections(self) -> int:

@@ -407,6 +407,18 @@ document, parsed into KaTeX macros so the browser typesets your notation, and
 **included in every agent's context** — a model shown `\ip{u}{v} \in \Hs` with no
 definitions will invent a meaning and answer confidently about it.
 
+**It also shows what the renderer adds around your file** — every package with its
+options, which are loaded only if your TeX has them, the five theorem environments
+with their printed names, the `\bp*` macros you must not redefine, and the whole
+generated preamble in full. Read from the template rather than written down, so it
+cannot go stale.
+
+Your file is injected **before** the options and the theorem environments, so anything
+you define or load yourself wins: your `\newtheorem{lemma}`, your
+`\usepackage[hidelinks]{hyperref}`, your own margins. The base packages load before
+your file so `\DeclareMathOperator` works in it. The list is there so you can see what
+you are overriding — you cannot avoid a collision you cannot see.
+
 The sheet reports how many macros the browser parsed. If a macro of yours is
 missing from that count it will still reach the document and the agents; only the
 browser's display is affected. `\newcommand` with an optional-argument default is
@@ -496,6 +508,7 @@ warning, blue = note.
 | `XRF001`–`XRF005` | Cross-references: a citation to a label nothing defines, the same label defined twice, a citation out of scope, a citation into another node's proof, a label nothing cites. |
 | `TEX001`–`TEX002` | Authored LaTeX that fails *silently*: a mid-line `%` that deletes the rest of a line, an unbalanced `$`. |
 | `TGT001`–`TGT002` | The target theorem's statement has never been audited, or was audited against earlier wording. |
+| `circular-citation` | Not a `bp check` code but an objection kind: a citation pointing *up* the graph that the verifier judged to be used as a **fact**. The parent's proof rests on this node, so each rests on the other and neither is established. A child may *refer* to a parent's equation; it may never assume it. |
 | `SYS001` | The computed fields in a file are out of date. Harmless; run `bp sweep`. |
 
 `LED005`, `LED006` and `USE001` are warnings on purpose. A real result vaguely

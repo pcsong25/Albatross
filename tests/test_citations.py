@@ -44,6 +44,10 @@ def graph_of(project):
     return g
 
 
+def by_code(diagnostics, code):
+    return [d for d in diagnostics if d.code == code]
+
+
 def audit_reply(clean=True):
     return json_reply(
         {
@@ -323,7 +327,7 @@ class TestLayerFourCitationsAreObligations:
         assert report.references_checked == 1
         assert any("citation" in c for c in report.checked)
         assert report.record.references == {
-            "total": 1, "verified": 1, "flagged": 0, "cached": 0
+            "total": 1, "verified": 1, "flagged": 0, "circular": 0, "cached": 0
         }
 
     def test_citations_are_checked_at_standard_not_only_at_deep(self, project):
@@ -355,3 +359,267 @@ class TestLayerFourCitationsAreObligations:
         report = verify_role.verify(project, "t", registry=second, level="standard")
         assert report.references_cached == 1
         assert report.verdict == "verified"
+
+
+class TestTheCircularityRule:
+    """*A child may refer to a parent's equation; it may never use it as a fact.*
+
+    The reason is a loop with no bottom: the parent's proof cites the child, so if the
+    child draws a fact from the parent, each rests on the other and neither is
+    established — and nothing in the graph shows it, because each step looks locally
+    fine.
+
+    The split cannot be made deterministically: whether a reference *identifies* or
+    *asserts* is a fact about the prose. So code enumerates the loop candidates and an
+    agent judges each one, which is the usual division of labour here.
+    """
+
+    def _upward(self, project):
+        """A child whose statement points at its parent's display."""
+        write_node(
+            project, "parent", target=True, children=["child"], proof="By `child`.",
+            statement="\\begin{equation}\\label{eq:riccati} z' \\ge \\kappa z^2 \\end{equation}",
+            uses={"child": {"applied_to": "x", "discharges": {}}},
+        )
+        write_node(
+            project, "child",
+            statement="Let $z$ be as in \\eqref{eq:riccati}. Then $z$ blows up.",
+            proof="An argument.",
+        )
+        return graph_of(project)
+
+    def test_the_relation_is_computed_deterministically(self, project):
+        g = self._upward(project)
+        assert xref.relation(g, "child", "parent") == xref.ANCESTOR
+        assert xref.relation(g, "parent", "child") == xref.DESCENDANT
+        assert xref.relation(g, "child", "child") == xref.SELF
+
+    def test_an_upward_citation_is_marked_as_such_on_the_record(self, project):
+        g = self._upward(project)
+        record = xref.reference_obligations_for(g["child"], g)[0]
+        assert record["relation"] == xref.ANCESTOR
+
+    def test_the_hash_moves_when_the_relation_moves(self, project):
+        """Re-parenting changes the question from "does it support this" to "is this a
+        loop", so the cached answer to the old question must not be reused."""
+        g = self._upward(project)
+        before = xref.reference_obligations_for(g["child"], g)[0]["hash"]
+        ops.set_children(project, "parent", [])
+        g2 = graph_of(project)
+        after = xref.reference_obligations_for(g2["child"], g2)[0]["hash"]
+        assert after != before
+
+    def _run(self, project, used_as_fact, why):
+        registry = scripted_registry(
+            project,
+            extractor=[json_reply({"claims": []})],
+            obligation=[json_reply({"used_as_fact": used_as_fact, "why": why,
+                                    "confidence": "high"})],
+            verifier_a=[json_reply({"checked": ["x"], "objections": []})],
+            verifier_b=[json_reply({"checked": ["y"], "objections": []})],
+            confirmer=[json_reply({"upheld": True, "why": why})],
+        )
+        return verify_role.verify(project, "child", registry=registry, level="standard")
+
+    def test_referring_only_is_allowed(self, project):
+        """Naming the object under discussion is not assuming anything about it."""
+        self._upward(project)
+        report = self._run(project, False, "it only says which z is meant")
+        assert report.verdict == "verified"
+        assert report.circular_citations == 0
+        assert any("names it, does not assume it" in c for c in report.checked)
+
+    def test_using_it_as_a_fact_is_a_loop_and_flags_the_node(self, project):
+        self._upward(project)
+        report = self._run(
+            project, True, "the growth bound is taken from the parent as a premise"
+        )
+        assert report.verdict == "flagged"
+        assert report.circular_citations == 1
+        flag = next(f for f in report.flags if f.kind == "circular-citation")
+        # The graph fact lives in `context`, which confirmation does not rewrite — for
+        # a loop it is the part the reader most needs and the part a model restating
+        # the objection is least likely to reproduce.
+        assert "rests on this node" in flag.context
+        assert "loop with no bottom" in flag.context
+        assert flag.to_record()["context"] == flag.context
+        assert report.record.references["circular"] == 1
+
+    def test_the_reason_says_it_is_a_loop_not_a_weak_step(self, project):
+        """A circular citation and a citation that merely fails to support its use are
+        different failures, and conflating them would send the user to fix the wrong
+        thing."""
+        self._upward(project)
+        report = self._run(project, True, "it is consumed as a hypothesis")
+        text = " ".join(report.reasons)
+        assert "circular citation" in text
+        assert "neither is established" in text
+
+    def test_an_upward_citation_is_asked_the_circularity_question(self, project):
+        """Asking a loop candidate "does the cited text support this use" gets "yes,
+        the parent asserts it" — true, and exactly the wrong answer."""
+        self._upward(project)
+        seen: list[str] = []
+        registry = scripted_registry(
+            project,
+            extractor=[json_reply({"claims": []})],
+            obligation=[json_reply({"used_as_fact": False, "why": "names only",
+                                    "confidence": "high"})],
+            verifier_a=[json_reply({"checked": ["x"], "objections": []})],
+            verifier_b=[json_reply({"checked": ["y"], "objections": []})],
+        )
+        agent = registry.agent("obligation")
+        original = agent.invoke
+        agent.invoke = (  # type: ignore[method-assign]
+            lambda s, u, t, _o=original: (seen.append(s + "\n" + u), _o(s, u, t))[1]
+        )
+        verify_role.verify(project, "child", registry=registry, level="standard")
+        assert seen
+        assert "checking one citation for **circularity**" in seen[0]
+        # The graph fact has to be in the prompt: the model cannot see the graph.
+        assert "own proof cites" in seen[0]
+
+    def test_a_downward_citation_still_gets_the_support_question(self, project):
+        write_node(
+            project, "parent", target=True, children=["child"],
+            proof="By `child` and \\eqref{eq:kid} we are done.",
+            statement="A theorem.",
+            uses={"child": {"applied_to": "x", "discharges": {}}},
+        )
+        write_node(project, "child",
+                   statement="\\begin{equation}\\label{eq:kid} \\|u\\| \\le C \\end{equation}")
+        seen: list[str] = []
+        registry = scripted_registry(
+            project,
+            extractor=[json_reply({"claims": []})],
+            obligation=[json_reply({"entails": True, "why": "yes", "confidence": "high"})],
+            verifier_a=[json_reply({"checked": ["x"], "objections": []})],
+            verifier_b=[json_reply({"checked": ["y"], "objections": []})],
+        )
+        agent = registry.agent("obligation")
+        original = agent.invoke
+        agent.invoke = (  # type: ignore[method-assign]
+            lambda s, u, t, _o=original: (seen.append(s), _o(s, u, t))[1]
+        )
+        report = verify_role.verify(project, "parent", registry=registry, level="standard")
+        assert report.verdict == "verified"
+        # The circularity prompt has a distinctive opening; the support prompt does not
+        # (it does mention circularity among its failure modes, which is fine).
+        assert seen and "checking one citation for **circularity**" not in seen[0]
+
+    def test_the_rule_reaches_the_roles_that_write_and_read_the_text(self, project):
+        from bp.roles import context as context_mod
+
+        g = self._upward(project)
+        block = context_mod.xref_block(g, g["child"])
+        assert "above" in block
+        assert "never be used as a fact" in block
+
+    def test_XRF003_states_the_rule_rather_than_only_the_consequence(self, project):
+        g = self._upward(project)
+        d = by_code(xref.check_xref(g), "XRF003")
+        assert len(d) == 1
+        assert "must not be used as a fact" in d[0].message
+        assert "never" in (d[0].hint or "")
+
+    def test_hoisting_the_display_removes_the_problem(self, project):
+        """The documented fix, tested — otherwise the advice is untested advice."""
+        write_node(project, "parent", target=True, children=["setting", "child"],
+                   proof="By `setting` and `child`.", statement="A theorem.",
+                   uses={"setting": {"applied_to": "x", "discharges": {}},
+                         "child": {"applied_to": "x", "discharges": {}}})
+        write_node(project, "setting", role="definition",
+                   statement="\\begin{equation}\\label{eq:riccati} z' \\ge \\kappa z^2 \\end{equation}")
+        write_node(project, "child", children=["setting"],
+                   statement="Let $z$ be as in \\eqref{eq:riccati}. Then $z$ blows up.",
+                   proof="An argument.",
+                   uses={"setting": {"applied_to": "x", "discharges": {}}})
+        g = graph_of(project)
+        assert by_code(xref.check_xref(g), "XRF003") == []
+        assert xref.relation(g, "child", "setting") == xref.DESCENDANT
+
+
+class TestPreambleDefaults:
+    """What the renderer adds around your preamble, extracted from the template.
+
+    You cannot avoid a collision you cannot see, and "your preamble wins" is only
+    reassuring once you can see what it is winning against. Extracted rather than
+    listed by hand, because a hand-written list is a list that goes stale — and the
+    whole value here is that the user can trust it.
+    """
+
+    def test_the_defaults_are_the_real_generated_preamble(self):
+        from bp import render
+
+        text = render.default_preamble()
+        assert text.startswith("\\documentclass")
+        assert "\\begin{document}" not in text
+        # And it is genuinely a prefix of what a document gets.
+        from bp.graph import Graph
+
+        assert render.document(Graph([]), today="2026-01-01").startswith(text[:200])
+
+    def test_every_package_is_listed_with_its_options(self):
+        from bp import render
+
+        packages = {p["name"]: p for p in render.preamble_facts()["packages"]}
+        assert "amsmath" in packages
+        assert packages["hyperref"]["options"].startswith("colorlinks")
+        assert packages["geometry"]["options"] == "margin=1.15in"
+
+    def test_optional_packages_are_marked_as_such(self):
+        """An `\\IfFileExists` guard degrades; an unguarded `\\usepackage` in the
+        user's own file is a hard error. The difference matters enough to show."""
+        from bp import render
+
+        packages = {p["name"]: p for p in render.preamble_facts()["packages"]}
+        assert packages["enumitem"]["optional"] is True
+        assert packages["amsmath"]["optional"] is False
+
+    def test_theorem_environments_are_listed_with_their_printed_names(self):
+        from bp import render
+
+        envs = {e["name"]: e["printed_as"] for e in render.preamble_facts()["environments"]}
+        assert envs == {
+            "theorem": "Theorem",
+            "proposition": "Proposition",
+            "lemma": "Lemma",
+            "definition": "Definition",
+            "assumption": "Assumption",
+        }
+
+    def test_latex_comments_are_not_read_as_definitions(self):
+        """The template *documents* the collisions it avoids, and those comments quote
+        `\\newtheorem{lemma}{Lemma}`. An unfiltered scan reported it as a real
+        definition, listing `lemma` twice."""
+        from bp import render
+
+        names = [e["name"] for e in render.preamble_facts()["environments"]]
+        assert len(names) == len(set(names))
+
+    def test_the_renderers_own_macros_are_named_so_they_are_not_redefined(self):
+        from bp import render
+
+        macros = render.preamble_facts()["macros"]
+        assert "\\bpmark" in macros
+        assert "\\bphyp" in macros
+
+    def test_the_user_preamble_is_injected_before_the_options(self, project):
+        """The ordering guarantee, tested rather than asserted in a comment: a user's
+        `\\newtheorem{lemma}` and `\\usepackage[hidelinks]{hyperref}` must come first,
+        or they collide and nothing compiles."""
+        from bp import ops, render
+
+        write_node(project, "t", target=True, statement="A theorem.")
+        ops.set_preamble(project, "% MINE\n\\newtheorem{lemma}{Lemma}\n")
+        text = render.document(
+            graph_of(project), preamble=ops.read_preamble(project), today="2026-01-01"
+        )
+        # The real directives, not the header comment that explains them — the
+        # comment mentions `\PassOptionsToPackage` and would match first.
+        assert text.index("% MINE") < text.index(
+            "\\PassOptionsToPackage{margin=1.15in}{geometry}"
+        )
+        assert text.index("% MINE") < text.index("\\@ifundefined{lemma}{\\newtheorem")
+        # And amsmath is before it, so a user's \DeclareMathOperator works.
+        assert text.index("\\usepackage{amsmath}") < text.index("% MINE")

@@ -376,6 +376,18 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
         definitions out of it so KaTeX renders statements in your notation."""
         return ops.read_preamble(project)
 
+    @app.get("/api/preamble/defaults")
+    def api_preamble_defaults(clean: bool = False) -> dict[str, Any]:
+        """What the renderer's own preamble loads and defines.
+
+        A mathematician pasting in their paper's preamble needs to know what they are
+        landing on top of. Their file is injected *before* the options and the theorem
+        environments, so theirs wins — but "yours wins" is only reassuring if you can
+        see what it is winning against. Extracted from the real template, so it cannot
+        drift from what a document actually gets.
+        """
+        return render_mod.preamble_facts(clean=clean)
+
     @app.post("/api/preamble")
     def api_set_preamble(body: TextBody) -> dict[str, Any]:
         mutate(ops.set_preamble, project, body.text)

@@ -14,7 +14,7 @@ the status from that:
                  ∧ no unsourced ledger claims
                  ∧ no flagged obligations
                  ∧ no flagged claims
-                 ∧ no flagged citations
+                 ∧ no flagged or circular citations
                  ∧ no confirmed objections
                  ∧ at least one whole-proof verifier answered
 
@@ -90,7 +90,7 @@ def implied_status(record: VerificationRecord) -> str:
         return "flagged"
     if record.flagged_obligations or record.flagged_claims:
         return "flagged"
-    if record.flagged_references:
+    if record.flagged_references or record.circular_citations:
         return "flagged"
     if record.confirmed_objections:
         return "flagged"
@@ -123,11 +123,18 @@ def reasons(record: VerificationRecord) -> list[str]:
     if record.flagged_claims:
         n = record.flagged_claims
         out.append(f"{n} ledger claim{'s' if n != 1 else ''} flagged")
-    if record.flagged_references:
-        n = record.flagged_references
+    if record.circular_citations:
+        n = record.circular_citations
         out.append(
-            f"{n} citation{'s' if n != 1 else ''} flagged — the cited text does not "
-            "give what the citing passage uses it for"
+            f"{n} circular citation{'s' if n != 1 else ''} — a statement above this "
+            "node in the graph is being used as a fact, so each rests on the other "
+            "and neither is established"
+        )
+    plain = record.flagged_references - record.circular_citations
+    if plain > 0:
+        out.append(
+            f"{plain} citation{'s' if plain != 1 else ''} flagged — the cited text "
+            "does not give what the citing passage uses it for"
         )
     if record.confirmed_objections:
         n = record.confirmed_objections
@@ -200,11 +207,12 @@ def compact(record: VerificationRecord | None) -> str:
         )
     if record.references:
         rf = record.references
-        bits.append(
-            "citations: {v}/{t} verified, {f} flagged".format(
-                v=rf.get("verified", 0), t=rf.get("total", 0), f=rf.get("flagged", 0)
-            )
+        piece = "citations: {v}/{t} verified, {f} flagged".format(
+            v=rf.get("verified", 0), t=rf.get("total", 0), f=rf.get("flagged", 0)
         )
+        if rf.get("circular"):
+            piece += f", {rf['circular']} circular"
+        bits.append(piece)
     if record.obligations:
         ob = record.obligations
         bits.append(

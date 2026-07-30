@@ -183,7 +183,7 @@ def xref_block(graph: Graph, node: Node) -> str:
     """
     from .. import xref
 
-    return xref.obligations_note(xref.build(graph), node.id)
+    return xref.obligations_note(xref.index_for(graph), node.id, graph)
 
 
 def uses_block(node: Node) -> str:

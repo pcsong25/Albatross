@@ -34,6 +34,7 @@ enumerated, assigned a source, and dispatched to a verifier *can* be, and is.
 | Is each sourced claim justified by its source | **agent** — claim check |
 | Does a cited reference exist, once, unambiguously | code (`XRF001`, `XRF002`) |
 | Does the cited text support the use made of it | **agent** — citation check |
+| Is a citation pointing *up* the graph a loop, or only a name | **agent** — circularity check |
 | Does the parent follow from the children's conclusions | **agent** — whole-proof pass |
 | Is the statement well-posed, non-vacuous, correctly quantified | **agent** — statement audit |
 | Which nodes are proved, given all of the above | code — propagation sweep |
@@ -769,6 +770,23 @@ Four things it does that are not obvious:
   `\label`, an `Overfull \vbox` while the output routine is active (content that
   fell off the page and is *not in the PDF*), and LaTeX asking for another pass.
 
+### The generated preamble is visible to the user
+
+`render.preamble_facts` reports what the renderer loads and defines — every package
+with its options, whether it is `\IfFileExists`-guarded, the five theorem
+environments with their printed names, and the `\bp*` macros. Served at
+`GET /api/preamble/defaults`, shown in the Preamble sheet beside the editable file,
+and printed by `bp preamble --defaults`.
+
+It is **extracted from the rendered template**, not listed by hand: a hand-written
+list goes stale, and the entire value is that the user can trust it. Comments are
+stripped first — the template documents the collisions it avoids, and those comments
+quote `\newtheorem{lemma}{Lemma}`, which an unfiltered scan read as a real
+definition.
+
+You cannot avoid a collision you cannot see, and "your preamble wins" is only
+reassuring once you can see what it is winning against.
+
 ### Ordering in the LaTeX preamble is load-bearing
 
 `bp/templates/document.tex.j2` injects the user's `preamble.tex` **after** the
@@ -853,6 +871,50 @@ citations resolve.
 `deterministic.xref = fail`, and `implied_status` derives `flagged`. This holds at
 `quick`, with both panel members saying "no objection": a node whose text cites
 nothing cannot be recorded as verified, whatever a model thinks of the argument.
+
+### The rule: refer, never assume
+
+> **A child may refer to a parent's equation. It may never use it as a fact.**
+
+The reason is a loop with no bottom. The parent's proof cites the child; if the child
+then draws a *fact* from the parent's statement, each rests on the other and neither
+is established — and nothing in the graph shows it, because every step looks locally
+fine and the `children` relation is still acyclic.
+
+Both halves matter. **Referring is legitimate and necessary**: naming the object under
+discussion ("the solution $\omega$ of that equation"), fixing notation, orienting the
+reader. **Assuming is fatal**: taking a hypothesis, a step, a bound or a conclusion
+from what the ancestor asserts.
+
+The split cannot be made deterministically — whether a reference identifies or asserts
+is a fact about the prose. So the division of labour is the usual one: **code
+enumerates the loop candidates, an agent judges each one.** `xref.relation` classifies
+every citation as `self`, `descendant`, `ancestor` or `unrelated`; `ANCESTOR` is a
+candidate; and each candidate goes to `prompts/verify_circularity.md`, which asks one
+question and nothing else:
+
+> Does the citing passage *consume* something the cited statement asserts, or does it
+> only name what is meant?
+
+`CircularityVerdict.used_as_fact` is deliberately not phrased as `entails`, which would
+read backwards — the healthy answer here is a **no**. A `true` becomes a
+`circular-citation` flag, counted as `references.circular` on the record, and
+`implied_status` refuses `verified` while any exists.
+
+The flag's structural half — *which* node rests on which — lives in `Flag.context`
+rather than in `why`, because the confirmation pass rewrites `why` with its own sharper
+sentence and a model restating the objection is least likely to reproduce the graph
+fact, which is the part the reader most needs.
+
+The rule is stated in four places, because four different actors need it: `XRF003`'s
+hint, `context.xref_block` (so every role reading the node sees it), the decomposer's
+prompt (so it does not *write* such a child), and `verify_proof.md`'s error taxonomy as
+`circular`.
+
+**The fix, whenever this comes up:** the shared display belongs in its own node — a
+`definition` reads well — cited by the parent and by every child that needs it. The
+relation becomes `descendant`, the reference becomes legitimate, and the verifier is
+handed the content automatically.
 
 ### Layer 4 — citations are obligations
 
