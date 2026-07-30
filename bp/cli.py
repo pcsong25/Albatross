@@ -21,8 +21,9 @@ from rich.table import Table
 from rich.text import Text
 
 from . import checks, events as events_mod, frontier as frontier_mod, ops
-from . import render as render_mod, why as why_mod
+from . import render as render_mod, verification as verification_mod, why as why_mod
 from .discharge import all_obligations, obligations_for
+from .ledger import all_claim_obligations, claim_obligations_for
 from .graph import GraphError
 from .paths import ProjectNotFound, find_project
 from .propagate import (
@@ -167,6 +168,35 @@ def show(
             console.print(Text(f"    {cid} applied to {use.applied_to or '-'}"))
             for hid, src in sorted(use.discharges.items()):
                 console.print(Text(f"      {hid} <- {src}"))
+    if node.claims:
+        console.print("  claim ledger:")
+        for claim in node.claims:
+            src = claim.source
+            where = "UNSOURCED" if src.kind == "none" else f"{src.kind}:{src.ref}"
+            console.print(Text(f"    {claim.id} [{where}] {claim.text}"))
+        from .ledger import ledger_is_stale
+
+        if ledger_is_stale(node):
+            console.print(
+                "    [yellow]extracted from an earlier version of this proof[/]"
+            )
+
+    # The verification record, so that `verified` is never an opaque flag: what was
+    # checked, at what level, by which model.
+    console.print()
+    console.print(Text("verification", style="bold"))
+    console.print(Text(f"  {verification_mod.compact(node.verification)}"))
+    if node.verification is not None:
+        reasons = verification_mod.reasons(node.verification)
+        for reason in reasons:
+            console.print(Text(f"  flagged because: {reason}"))
+        if node.verification.models:
+            console.print(
+                "  models: "
+                + ", ".join(
+                    f"{k}={v}" for k, v in sorted(node.verification.models.items())
+                )
+            )
     for section in ("Statement", "Proof", "Notes"):
         text = node.section(section)
         if text.strip():
@@ -271,17 +301,38 @@ def check(
 def obligations(
     node_id: Optional[str] = typer.Argument(None, help="node id (default: all)"),
     root: Optional[Path] = typer.Option(None, "--root"),
+    kind: str = typer.Option(
+        "all", "--kind", help="all | discharge | claim — which worklist to emit"
+    ),
 ) -> None:
-    """Emit the obligation list: one record per discharge, for the verifier."""
+    """Emit the worklists: one record per discharge and per sourced ledger claim.
+
+    This is what the verifier consumes, and it is generated here — deterministically
+    — so that a clean verdict means *all N enumerated checks passed* rather than
+    *nothing caught my eye*. Each record carries a content hash, which is what the
+    verifier's cache is keyed on.
+    """
     project, graph = _graph(root)
+    if kind not in {"all", "discharge", "claim"}:
+        err_console.print(
+            f"[bold red]error[/] unknown kind {kind!r}; use all, discharge or claim"
+        )
+        raise typer.Exit(code=2)
     if node_id is None:
-        records = all_obligations(graph)
+        discharge_records = all_obligations(graph)
+        claim_records = all_claim_obligations(graph)
     else:
         node = graph.get(node_id)
         if node is None:
             err_console.print(f"[bold red]error[/] no node {node_id!r}")
             raise typer.Exit(code=2)
-        records = obligations_for(node, graph)
+        discharge_records = obligations_for(node, graph)
+        claim_records = claim_obligations_for(node, graph)
+    records = []
+    if kind in {"all", "discharge"}:
+        records.extend(discharge_records)
+    if kind in {"all", "claim"}:
+        records.extend(claim_records)
     sys.stdout.write(json.dumps(records, indent=2, ensure_ascii=False) + "\n")
 
 

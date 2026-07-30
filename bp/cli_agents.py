@@ -19,13 +19,15 @@ from rich.table import Table
 from rich.text import Text
 
 from . import jobs as jobs_mod
-from . import ops, recompile as recompile_mod
-from .agents.base import AgentError, BudgetExceeded
+from . import ops, recompile as recompile_mod, verification as verification_mod
+from .agents.base import AgentError, Budget, BudgetExceeded
 from .agents.log import CallLog
 from .agents.registry import ConfigError, Registry
 from .paths import ProjectNotFound, find_project
+from .roles import audit as audit_role
 from .roles import check as check_role
 from .roles import decompose as decompose_role
+from .roles import extract as extract_role
 from .roles import prove as prove_role
 from .roles import verify as verify_role
 
@@ -158,23 +160,91 @@ def register(app: typer.Typer) -> None:
         raise typer.Exit(code=0 if report.clean else 1)
 
     @app.command()
+    def extract(
+        node_id: str,
+        root: Optional[Path] = typer.Option(None, "--root"),
+        replay: bool = typer.Option(False, "--replay"),
+        dry: bool = typer.Option(
+            False, "--no-record", help="report without writing the ledger to the node"
+        ),
+    ) -> None:
+        """Build the claim ledger for a proof, then audit it (LED001-LED006).
+
+        One cheap call. Every load-bearing claim the proof makes, with the source
+        the prose offers — and a hard error on every claim that has none.
+        """
+        registry = _registry(root, replay)
+        result = _run(
+            extract_role.extract,
+            registry.project,
+            node_id,
+            registry=registry,
+            apply=not dry,
+        )
+        console.print(Text(extract_role.summarise(result)))
+        _print_spend(registry)
+        raise typer.Exit(code=0 if result.clean else 1)
+
+    @app.command()
+    def audit(
+        node_id: str,
+        root: Optional[Path] = typer.Option(None, "--root"),
+        replay: bool = typer.Option(False, "--replay"),
+        dry: bool = typer.Option(
+            False, "--no-record", help="do not write the findings as a note"
+        ),
+    ) -> None:
+        """Audit a statement: well-posedness, vacuity, quantifiers, constants.
+
+        Never touches a status. This role stands in for the deterministic vacuity
+        and constant-scope checks that v0 defers, and is weaker than both — its
+        answers are prompts for your attention, not checks.
+        """
+        registry = _registry(root, replay)
+        report = _run(
+            audit_role.audit,
+            registry.project,
+            node_id,
+            registry=registry,
+            apply=not dry,
+        )
+        console.print(Text(audit_role.summarise(report)))
+        _print_spend(registry)
+        raise typer.Exit(code=0 if report.clean else 1)
+
+    @app.command()
     def verify(
         node_id: str,
         root: Optional[Path] = typer.Option(None, "--root"),
         replay: bool = typer.Option(False, "--replay"),
+        level: str = typer.Option(
+            verification_mod.STANDARD, "--level", "-l", help="quick | standard | deep"
+        ),
+        batch: int = typer.Option(
+            1, "--batch", help="obligation/claim checks per call; 1 is the reliable one"
+        ),
         obligations_only: bool = typer.Option(False, "--obligations-only"),
         proof_only: bool = typer.Option(False, "--proof-only"),
         dry: bool = typer.Option(
             False, "--no-record", help="report without writing a verdict to the node"
         ),
     ) -> None:
-        """Verify a node: obligations, whole proof, then confirmation."""
+        """Verify a node at the given level, then confirm every objection.
+
+        `quick` reads the proof; `standard` adds extraction, the ledger audit and
+        the discharge obligations; `deep` adds per-claim checks and a statement
+        audit. Which level produced a verdict is recorded on the node, because a
+        node verified at `quick` and one verified at `deep` are not making the same
+        claim.
+        """
         registry = _registry(root, replay)
         report = _run(
             verify_role.verify,
             registry.project,
             node_id,
             registry=registry,
+            level=level,
+            batch=batch,
             obligations=not proof_only,
             proof=not obligations_only,
             record=not dry,
@@ -204,17 +274,49 @@ def register(app: typer.Typer) -> None:
         dry_run: bool = typer.Option(False, "--dry-run", help="preview the bill"),
         replay: bool = typer.Option(False, "--replay"),
         node: Optional[list[str]] = typer.Option(None, "--node", help="limit to these"),
+        level: str = typer.Option(
+            verification_mod.STANDARD, "--level", "-l", help="quick | standard | deep"
+        ),
+        batch: int = typer.Option(
+            1, "--batch", help="obligation/claim checks per call; 1 is the reliable one"
+        ),
+        budget: Optional[int] = typer.Option(
+            None, "--budget", help="stop after this many model calls"
+        ),
     ) -> None:
-        """Verify every stale and unverified node, then sweep."""
+        """Verify every stale and unverified node at the given level, then sweep.
+
+        Ordering is by value: nodes on the path to the target first, then the
+        frontier, then the rest — so a run stopped by `--budget` has spent its
+        money where it mattered.
+        """
         registry = _registry(root, replay)
         prepared = _run(
-            recompile_mod.plan, registry.project, registry=registry, only=list(node or [])
+            recompile_mod.plan,
+            registry.project,
+            registry=registry,
+            only=list(node or []),
+            level=level,
+            batch=batch,
         )
         console.print(Text(prepared.describe()))
         if dry_run or not prepared.tasks:
             return
         console.print()
-        result = _run(recompile_mod.run, registry.project, registry=registry, only=list(node or []))
+        cap = None
+        if budget is not None:
+            # An explicit `--budget` replaces the configured caps rather than
+            # tightening them: the user is saying how many calls this run may make.
+            cap = Budget(max_usd=None, max_calls=budget)
+        result = _run(
+            recompile_mod.run,
+            registry.project,
+            registry=registry,
+            only=list(node or []),
+            level=level,
+            batch=batch,
+            budget=cap,
+        )
         console.print(Text(result.describe()))
         _print_spend(registry)
 

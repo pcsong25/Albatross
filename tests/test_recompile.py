@@ -97,12 +97,12 @@ class TestPlan:
 
     def test_a_priced_backend_produces_a_dollar_estimate(self, project):
         two_leaves(project)
-        from bp.agents.registry import Config, Registry, RoleConfig
+        from bp.agents.registry import ROLES, Config, Registry, RoleConfig
 
         config = Config(
             roles={
                 role: RoleConfig(backend="claude_api", model="claude-opus-5")
-                for role in ("decomposer", "checker", "verifier_a", "verifier_b", "prover")
+                for role in ROLES
             }
         )
         prepared = recompile.plan(project, registry=Registry(project, config))
@@ -111,12 +111,12 @@ class TestPlan:
 
     def test_a_subscription_backend_reports_calls_not_dollars(self, project):
         two_leaves(project)
-        from bp.agents.registry import Config, Registry, RoleConfig
+        from bp.agents.registry import ROLES, Config, Registry, RoleConfig
 
         config = Config(
             roles={
                 role: RoleConfig(backend="claude_cli", model="opus")
-                for role in ("decomposer", "checker", "verifier_a", "verifier_b", "prover")
+                for role in ROLES
             }
         )
         prepared = recompile.plan(project, registry=Registry(project, config))
@@ -143,7 +143,8 @@ class TestPlan:
             "t",
             registry=scripted_registry(
                 project,
-                verifier_a=[ENTAILS, NO_OBJECTION],
+                obligation=[ENTAILS],
+                verifier_a=[NO_OBJECTION],
                 verifier_b=[NO_OBJECTION],
             ),
         )
@@ -185,12 +186,9 @@ class TestRun:
         )
         registry = scripted_registry(
             project,
-            verifier_a=[
-                objection,
-                json_reply({"upheld": True, "why": "it really does not follow"}),
-                NO_OBJECTION,
-            ],
+            verifier_a=[objection, NO_OBJECTION],
             verifier_b=[NO_OBJECTION, NO_OBJECTION],
+            confirmer=[json_reply({"upheld": True, "why": "it really does not follow"})],
         )
         result = recompile.run(project, registry=registry)
         assert result.flagged == ["a"]
@@ -279,3 +277,157 @@ class TestJobRecords:
         records = jobs.Job.all(project)
         assert len(records) == 1
         assert "recompile" in records[0].describe()
+
+
+class TestLevels:
+    """The three levels, and that a dry run at each shows a different bill.
+
+    The point of the tier is cost control you can see before you pay it: `deep` on
+    a ten-claim proof is roughly fifteen calls, and a thirty-node graph is several
+    hundred. A level whose preview looked the same as the others would not be a
+    control.
+    """
+
+    def _with_a_ledger(self, project):
+        from bp.hash import proof_hash
+
+        write_node(
+            project,
+            "t",
+            target=True,
+            children=["c"],
+            proof="By `c` we are done.",
+            hypotheses=[{"id": "H1", "tex": "a > 0"}],
+            uses={"c": {"applied_to": "x", "discharges": {"H1": "hypothesis:H1"}}},
+        )
+        write_node(project, "c", statement="Lemma.", hypotheses=[{"id": "H1", "tex": "a > 0"}])
+        graph = ops.open_graph(project)
+        ops.record_ledger(
+            project,
+            "t",
+            [
+                {"id": "c1", "text": "a > 0", "source": {"kind": "hypothesis", "ref": "H1"}},
+                {"id": "c2", "text": "the lemma", "source": {"kind": "child", "ref": "c"}},
+            ],
+            proof_hash(graph["t"]),
+        )
+
+    def test_each_level_plans_a_different_number_of_calls(self, project):
+        self._with_a_ledger(project)
+        registry = scripted_registry(project)
+        counts = {
+            level: recompile.plan(project, registry=registry, level=level).calls
+            for level in ("quick", "standard", "deep")
+        }
+        assert counts["quick"] < counts["standard"] < counts["deep"]
+
+    def test_quick_plans_the_panel_only(self, project):
+        self._with_a_ledger(project)
+        task = recompile.plan(
+            project, registry=scripted_registry(project), level="quick"
+        ).tasks[0]
+        assert task.panel == 2
+        assert task.obligations == 0 and task.claims == 0
+        assert task.extract == 0 and task.audit == 0
+
+    def test_standard_plans_the_obligations_but_not_the_claims(self, project):
+        self._with_a_ledger(project)
+        task = recompile.plan(
+            project, registry=scripted_registry(project), level="standard"
+        ).tasks[0]
+        assert task.obligations == 1
+        assert task.claims == 0
+        # The ledger is current, so nothing to re-extract.
+        assert task.extract == 0
+
+    def test_deep_plans_the_claims_and_the_audit(self, project):
+        self._with_a_ledger(project)
+        task = recompile.plan(
+            project, registry=scripted_registry(project), level="deep"
+        ).tasks[0]
+        assert task.claims == 2
+        assert task.audit == 1
+
+    def test_a_stale_ledger_adds_an_extraction_call(self, project):
+        self._with_a_ledger(project)
+        ops.edit_proof(project, "t", "By `c`, and one further step, we are done.")
+        task = recompile.plan(
+            project, registry=scripted_registry(project), level="standard"
+        ).tasks[0]
+        assert task.extract == 1
+
+    def test_the_preview_names_the_level_and_the_jobs(self, project):
+        self._with_a_ledger(project)
+        text = recompile.plan(
+            project, registry=scripted_registry(project), level="deep"
+        ).describe()
+        assert "level deep" in text
+        assert "2 claim(s)" in text
+        assert "statement audit" in text
+
+    def test_batching_reduces_the_planned_call_count(self, project):
+        self._with_a_ledger(project)
+        registry = scripted_registry(project)
+        one = recompile.plan(project, registry=registry, level="deep", batch=1)
+        four = recompile.plan(project, registry=registry, level="deep", batch=4)
+        assert four.calls < one.calls
+        assert "batched 4 per call" in four.describe()
+
+    def test_an_unknown_level_is_refused(self, project):
+        two_leaves(project)
+        with pytest.raises(ops.OpError):
+            recompile.plan(project, registry=scripted_registry(project), level="thorough")
+        with pytest.raises(ops.OpError):
+            recompile.run(project, registry=scripted_registry(project), level="thorough")
+
+    def test_the_level_is_recorded_on_the_node(self, project):
+        two_leaves(project)
+        registry = scripted_registry(
+            project,
+            verifier_a=[NO_OBJECTION, NO_OBJECTION],
+            verifier_b=[NO_OBJECTION, NO_OBJECTION],
+        )
+        result = recompile.run(project, registry=registry, level="quick")
+        assert result.level == "quick"
+        assert "level quick" in result.describe()
+        assert graph_of(project)["a"].verification.level == "quick"
+
+    def test_resuming_keeps_the_level_the_run_started_at(self, project):
+        """Finishing a `deep` run at `quick` would leave half the graph claiming a
+        scrutiny it did not get."""
+        two_leaves(project)
+        registry = scripted_registry(
+            project, verifier_a=[NO_OBJECTION], verifier_b=[NO_OBJECTION]
+        )
+        registry.budget = Budget(max_calls=2)
+        interrupted = recompile.run(project, registry=registry, level="quick")
+        assert interrupted.job.params["level"] == "quick"
+
+        resumed = recompile.resume(
+            project,
+            interrupted.job.id,
+            registry=scripted_registry(
+                project, verifier_a=[NO_OBJECTION], verifier_b=[NO_OBJECTION]
+            ),
+        )
+        assert resumed.level == "quick"
+        assert graph_of(project)["b"].verification.level == "quick"
+
+
+class TestValueOrdering:
+    def test_the_frontier_comes_before_unrelated_nodes(self, project):
+        """A run stopped by --budget should have bought the most useful half: the
+        path to the target first, then the nodes where work is actually possible."""
+        write_node(project, "t", target=True, children=["mid"], proof="cites mid")
+        write_node(project, "mid", children=["deep"], proof="cites deep")
+        write_node(project, "deep", proof="an argument")
+        # Not reachable from the target, but on the frontier: nothing beneath it.
+        write_node(project, "loose", proof="an argument")
+        # Also unreachable, and blocked by its own unfinished child, so not on the
+        # frontier at all.
+        write_node(project, "waiting", children=["under"], proof="cites under")
+        write_node(project, "under", proof="an argument")
+        graph = graph_of(project)
+        order = recompile.order(graph, {"t", "mid", "deep", "loose", "waiting"})
+        assert order[:3] == ["t", "mid", "deep"]
+        assert order.index("loose") < order.index("waiting")
