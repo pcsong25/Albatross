@@ -16,7 +16,9 @@ it replaces this function and nothing else.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
+from typing import Any
 
 from .model import Node
 
@@ -24,6 +26,9 @@ _COMMENT_RE = re.compile(r"%.*$", re.M)
 _WS_RE = re.compile(r"\s+")
 
 HASH_LENGTH = 12
+#: Obligation and claim records are cached on their content hash, and the cache
+#: is keyed across a whole project, so these are longer than a statement hash.
+RECORD_HASH_LENGTH = 16
 
 
 def canonical_statement(text: str) -> str:
@@ -36,6 +41,31 @@ def statement_hash(node: Node) -> str:
     return hashlib.sha256(canonical_statement(node.statement_section).encode()).hexdigest()[
         :HASH_LENGTH
     ]
+
+
+def proof_hash(node: Node) -> str:
+    """A digest of the proof text, for deciding whether the ledger is current.
+
+    The claim ledger is extracted from the proof, so it goes out of date exactly
+    when the proof text moves. Same canonicalisation as the statement hash, and
+    for the same reason: over-invalidation is the safe direction.
+    """
+    return hashlib.sha256(canonical_statement(node.proof_section).encode()).hexdigest()[
+        :HASH_LENGTH
+    ]
+
+
+def content_hash(payload: dict[str, Any]) -> str:
+    """The cache key for one obligation or claim record.
+
+    It is taken over what the record *asks*, never over where it sits, so the
+    hash moves when the question changes and stays put when it does not.
+    Otherwise editing one paragraph of a proof would re-bill every check in the
+    node, which is the difference between a recompile you press and one you
+    avoid.
+    """
+    blob = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(blob.encode()).hexdigest()[:RECORD_HASH_LENGTH]
 
 
 def is_stale(node: Node, graph) -> bool:

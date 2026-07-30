@@ -36,13 +36,16 @@ from .load import (
 )
 from .model import (
     COMPUTED_FIELDS,
+    EXTRACTED_FIELDS,
     NOTES,
     PROOF,
     STATEMENT,
     VERIFICATION_FIELDS,
+    Claim,
     Hypothesis,
     Node,
     Use,
+    VerificationRecord,
     set_section,
 )
 from .paths import Project
@@ -103,8 +106,13 @@ def _guard(key: str) -> None:
         )
     if key in VERIFICATION_FIELDS:
         raise ComputedFieldError(
-            f"{key!r} is written only by a successful verification "
-            "(ops.record_verification)"
+            f"{key!r} is written only by a verification (ops.record_verification), "
+            "which derives it from the verification record — no role may set it"
+        )
+    if key in EXTRACTED_FIELDS:
+        raise ComputedFieldError(
+            f"{key!r} is the claim ledger, written only by ops.record_ledger from an "
+            "extraction of the current proof text"
         )
 
 
@@ -540,22 +548,91 @@ def set_assumption(
 
 
 @serialised
+def record_ledger(
+    project: Project,
+    node_id: str,
+    claims: list[dict[str, Any]],
+    proof_digest: str,
+    actor: str = "extractor",
+) -> Result:
+    """The only writer of ``claims`` and ``claims_of``.
+
+    The ledger is a computed field, so it does not go through
+    :func:`set_authored`: it is written here, from an extraction of the proof text
+    whose hash is recorded alongside it. When the proof moves, ``claims_of`` stops
+    matching and ``LED100`` says the ledger is describing an earlier proof rather
+    than letting a stale audit pass for a current one.
+    """
+    graph = open_graph(project)
+    node = graph.get(node_id)
+    if node is None:
+        raise OpError(f"no node {node_id!r}")
+
+    ids = [c.get("id") for c in claims]
+    if len(set(ids)) != len(ids):
+        raise OpError("claim ids must be unique within a node")
+    try:
+        parsed = [Claim(**dict(c)) for c in claims]
+    except Exception as exc:
+        raise OpError(f"malformed claim ledger: {exc}") from exc
+
+    node.claims = parsed
+    set_frontmatter(node, "claims", [c.model_dump() for c in parsed])
+    node.claims_of = proof_digest
+    set_frontmatter(node, "claims_of", quoted(proof_digest))
+    write_node(node)
+    return _finish(
+        project,
+        graph,
+        node,
+        "record_ledger",
+        {
+            "claims": len(parsed),
+            "unsourced": sum(1 for c in parsed if not c.sourced),
+        },
+        actor=actor,
+    )
+
+
+@serialised
 def record_verification(
     project: Project,
     node_id: str,
     verdict: str,
     flags: list[dict[str, Any]] | None = None,
+    record: dict[str, Any] | None = None,
     actor: str = "verifier",
 ) -> Result:
-    """The only writer of ``verified_against``.
+    """The only writer of ``verified_against`` and ``verification``.
 
     On ``verified`` the node records this statement's hash and each child's hash
     as they stand now. Any later change to any of them makes the node stale,
     which is how a verification certificate is prevented from outliving the
     claim it certified.
+
+    ``verdict`` is not an opinion a role hands in. It is derived from ``record``
+    by :func:`bp.verification.implied_status`, and when a record is supplied this
+    function checks that the two agree rather than trusting the caller — a role
+    that could pass ``verified`` with a record full of confirmed objections would
+    be setting ``local_status`` by the back door.
     """
     if verdict not in {"verified", "flagged"}:
         raise OpError(f"verdict must be 'verified' or 'flagged', not {verdict!r}")
+    if record is not None:
+        from .verification import implied_status
+
+        try:
+            parsed_record = VerificationRecord(**record)
+        except Exception as exc:
+            raise OpError(f"malformed verification record: {exc}") from exc
+        implied = implied_status(parsed_record)
+        if implied != verdict:
+            raise OpError(
+                f"the verification record for {node_id} implies {implied!r}, not "
+                f"{verdict!r}. local_status is derived from the record; it is not a "
+                "field a role gets to choose."
+            )
+
     graph = open_graph(project)
     node = graph.get(node_id)
     if node is None:
@@ -572,15 +649,35 @@ def record_verification(
     else:
         set_authored(node, "local_status", "flagged")
         set_authored(node, "flags", [dict(f) for f in (flags or [])])
+    if record is not None:
+        node.verification = parsed_record
+        set_frontmatter(node, "verification", _yaml_record(parsed_record))
     write_node(node)
     return _finish(
         project,
         graph,
         node,
         "verify",
-        {"verdict": verdict, "flags": len(flags or [])},
+        {
+            "verdict": verdict,
+            "flags": len(flags or []),
+            "level": (record or {}).get("level"),
+        },
         actor=actor,
     )
+
+
+def _yaml_record(record: VerificationRecord) -> dict[str, Any]:
+    """The record as plain YAML values.
+
+    ``checked_at`` is a timestamp string and must stay one: unquoted, YAML would
+    read it back as a datetime, which is the same class of bug as an unquoted hex
+    hash becoming a float.
+    """
+    data = record.model_dump()
+    if data.get("checked_at"):
+        data["checked_at"] = quoted(str(data["checked_at"]))
+    return data
 
 
 # --- archival ----------------------------------------------------------------

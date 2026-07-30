@@ -2,7 +2,8 @@
 
 Three families live here — the children-used check, a couple of schema-hygiene
 checks, and a drift check — plus the function that assembles all of them with
-integrity (:mod:`bp.graph`) and discharge (:mod:`bp.discharge`) into one report.
+integrity (:mod:`bp.graph`), discharge (:mod:`bp.discharge`) and the claim ledger
+(:mod:`bp.ledger`) into one report.
 
 Checks never mutate anything. They load, derive in memory, and describe.
 """
@@ -12,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from . import discharge as discharge_mod
+from . import ledger as ledger_mod
 from .diagnostics import Diagnostic, err, sort_diagnostics, warn
 from .graph import Graph, GraphError
 from .load import computed_in_memory, computed_on_disk, load_nodes
@@ -156,6 +158,29 @@ def load_graph(project: Project) -> tuple[Graph, list[Diagnostic], bool]:
     return graph, diagnostics, swept
 
 
+#: The deterministic check families, in the order the verification record lists
+#: them. Names are part of the record's schema, so they are here rather than
+#: spelled out in :mod:`bp.verification`.
+FAMILIES = ("integrity", "children_used", "discharge", "ledger")
+
+
+def for_node(graph: Graph, node: Node) -> dict[str, list[Diagnostic]]:
+    """Every deterministic diagnostic about one node, grouped by family.
+
+    This is what makes the verification record's ``deterministic`` block a fact
+    rather than a claim: the same functions ``bp check`` runs, re-run for one
+    node, family by family. Integrity is a whole-graph check, so it is filtered
+    to the diagnostics that name this node.
+    """
+    integrity = [d for d in graph.integrity() if d.node == node.id]
+    return {
+        "integrity": integrity,
+        "children_used": children_used(node),
+        "discharge": discharge_mod.check_discharge(node, graph),
+        "ledger": ledger_mod.check_ledger(node),
+    }
+
+
 def run(project: Project) -> Report:
     """Everything ``bp check`` runs, in the order a user wants to read it."""
     graph, diagnostics, swept = load_graph(project)
@@ -166,6 +191,7 @@ def run(project: Project) -> Report:
         diagnostics.extend(schema_hygiene(node))
         diagnostics.extend(children_used(node))
         diagnostics.extend(discharge_mod.check_discharge(node, graph))
+        diagnostics.extend(ledger_mod.check_ledger(node))
 
     if swept:
         diagnostics.extend(drift(graph))

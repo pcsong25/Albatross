@@ -34,11 +34,20 @@ COMPUTED_FIELDS = frozenset(
     {"global_status", "support", "blocked_by", "statement_hash", "stale"}
 )
 
-#: ``verified_against`` is also computed, but by a *verification*, not by the
-#: sweep. It is written exactly once per successful verification and read
-#: thereafter. Keeping it out of :data:`COMPUTED_FIELDS` lets the sweep leave it
-#: alone; keeping it here documents that it is still not a hand-edited field.
-VERIFICATION_FIELDS = frozenset({"verified_against"})
+#: Also computed, but by a *verification* rather than by the sweep. Written once
+#: per verification by :func:`bp.ops.record_verification` and read thereafter.
+#: Keeping them out of :data:`COMPUTED_FIELDS` lets the sweep leave them alone;
+#: keeping them here documents that they are still not hand-edited fields — and
+#: in particular that no role may set ``local_status``, which is *derived* from
+#: ``verification`` by :mod:`bp.verification`.
+VERIFICATION_FIELDS = frozenset({"verified_against", "verification"})
+
+#: The claim ledger. Produced by the extractor role, audited deterministically by
+#: :mod:`bp.ledger`, and written only by :func:`bp.ops.record_ledger`. It is a
+#: computed field for the same reason ``global_status`` is: a ledger any role
+#: could edit would let the role that makes a claim also decide the claim is
+#: sourced, and ``LED001`` would stop meaning anything.
+EXTRACTED_FIELDS = frozenset({"claims", "claims_of"})
 
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]*$")
 
@@ -164,6 +173,123 @@ class Use(BaseModel):
     discharges: dict[str, str] = Field(default_factory=dict)
 
 
+#: The source kinds a ledger claim may name. ``none`` is the honest answer for a
+#: claim the prose does not justify, and it is the one the audit turns into a hard
+#: error (``LED001``). An extractor that invents a plausible source instead of
+#: writing ``none`` defeats the entire mechanism.
+CLAIM_SOURCE_KINDS = (
+    "hypothesis",
+    "child",
+    "claim",
+    "literature",
+    "computation",
+    "none",
+)
+
+ClaimSourceKind = Literal[
+    "hypothesis", "child", "claim", "literature", "computation", "none"
+]
+
+
+class ClaimSource(BaseModel):
+    """Where a ledger claim says it comes from.
+
+    ``ref`` names the thing: a hypothesis id, a child id, an earlier claim id, a
+    bibliographic reference, or a path to a computation. It is empty exactly when
+    ``kind`` is ``none``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: ClaimSourceKind = "none"
+    ref: str = ""
+
+
+class Claim(BaseModel):
+    """One load-bearing claim a proof makes, with the source the prose offers.
+
+    The ``uses`` table covers the *children's* hypotheses. It says nothing about
+    what the reduction asserts on its own account — "by standard elliptic
+    regularity, $\\omega \\in C^1$, hence…" has no child, no hypothesis and no
+    entry anywhere. The ledger is what makes those claims enumerable, and
+    enumerable is what lets a verifier's "no objection" mean *all eleven claims
+    were checked* rather than *nothing caught my eye*.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    text: str = ""
+    source: ClaimSource = Field(default_factory=ClaimSource)
+
+    @field_validator("id")
+    @classmethod
+    def _id_shape(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("claim id must be non-empty")
+        return v.strip()
+
+    @property
+    def sourced(self) -> bool:
+        return self.source.kind != "none"
+
+
+class VerificationRecord(BaseModel):
+    """What was actually checked, the last time this node was verified.
+
+    ``local_status: verified`` must not be an opaque flag. A node verified at
+    ``quick`` and one verified at ``deep`` are not making the same claim, and
+    collapsing them to one colour would be dishonest — so the record says which
+    checks ran, how many questions each enumerated, and which model answered
+    them. :mod:`bp.verification` assembles it and derives ``local_status`` from
+    it; nothing else may write either.
+
+    ``extra="allow"`` on purpose: a later level or a new job should be readable
+    by an older build rather than making the file refuse to load.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    checked_at: str | None = None
+    level: str = "quick"
+    #: check name -> ``pass`` | ``fail`` | ``not_run``
+    deterministic: dict[str, str] = Field(default_factory=dict)
+    #: ``{claims, unsourced, checked, flagged, cached}``. Empty when no ledger was
+    #: available, which is the honest answer at ``quick`` — reporting
+    #: ``unsourced: 0`` from a ledger nobody extracted would be a claim about
+    #: claims nobody enumerated.
+    ledger: dict[str, int] = Field(default_factory=dict)
+    #: ``{total, verified, flagged, cached}``
+    obligations: dict[str, int] = Field(default_factory=dict)
+    #: panel role -> ``no_objection`` | ``objection_confirmed`` |
+    #: ``objection_withdrawn`` | ``did_not_answer``
+    whole_proof: dict[str, str] = Field(default_factory=dict)
+    statement_audit: str = "not_run"
+    #: job name -> the model that answered it, so the record names its own
+    #: provenance rather than making the user guess from ``bp.yaml``.
+    models: dict[str, str] = Field(default_factory=dict)
+
+    @property
+    def deterministic_failures(self) -> list[str]:
+        return sorted(k for k, v in self.deterministic.items() if v == "fail")
+
+    @property
+    def unsourced_claims(self) -> int:
+        return int(self.ledger.get("unsourced", 0))
+
+    @property
+    def flagged_obligations(self) -> int:
+        return int(self.obligations.get("flagged", 0))
+
+    @property
+    def flagged_claims(self) -> int:
+        return int(self.ledger.get("flagged", 0))
+
+    @property
+    def confirmed_objections(self) -> int:
+        return sum(1 for v in self.whole_proof.values() if v == "objection_confirmed")
+
+
 class Flag(BaseModel):
     """An objection record. Written by the verifier in L1; carried, not
     interpreted, in L0 — except that a node whose ``local_status`` is ``flagged``
@@ -212,6 +338,12 @@ class Node(BaseModel):
     blocked_by: list[str] = Field(default_factory=list)
     statement_hash: str | None = None
     verified_against: dict[str, str] = Field(default_factory=dict)
+    #: The claim ledger, and the hash of the proof text it was extracted from.
+    #: When they disagree the ledger describes an earlier proof, which is
+    #: ``LED100``.
+    claims: list[Claim] = Field(default_factory=list)
+    claims_of: str | None = None
+    verification: VerificationRecord | None = None
     stale: bool = False
 
     # --- file backing --------------------------------------------------------
@@ -233,7 +365,7 @@ class Node(BaseModel):
             )
         return v
 
-    @field_validator("statement_hash", "verified_against", mode="before")
+    @field_validator("statement_hash", "verified_against", "claims_of", mode="before")
     @classmethod
     def _hashes_are_strings(cls, v: Any) -> Any:
         """Keep hashes textual.
@@ -329,6 +461,20 @@ class Node(BaseModel):
             if h.id == hid:
                 return h
         return None
+
+    def claim(self, cid: str) -> "Claim | None":
+        for c in self.claims:
+            if c.id == cid:
+                return c
+        return None
+
+    @property
+    def claim_ids(self) -> set[str]:
+        return {c.id for c in self.claims}
+
+    @property
+    def unsourced_claims(self) -> list["Claim"]:
+        return [c for c in self.claims if not c.sourced]
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<Node {self.id} {self.local_status}/{self.global_status}>"

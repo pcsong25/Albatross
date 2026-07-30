@@ -50,6 +50,9 @@ FRONTMATTER_ORDER = [
     "blocked_by",
     "statement_hash",
     "verified_against",
+    "claims",
+    "claims_of",
+    "verification",
     "stale",
 ]
 
