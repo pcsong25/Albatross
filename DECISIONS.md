@@ -831,3 +831,206 @@ it away from `global_status`.
 **Why the `checker` role rather than a sixth role.** It is already a strong model
 in every configuration, and this is a small frequent call. Splitting it out is a
 one-line change in `bp/roles/tidy.py` when someone wants it cheaper.
+
+---
+
+## D043 — The claim ledger is a computed field, with its own writer
+
+**Date** 2026-07-29 · **Milestone** Addendum A
+
+Addendum A says the ledger is "a **computed field** — regenerated when the proof
+text changes, never hand-edited, never written by any other role." It does not say
+which mechanism enforces that, and the repo already has two.
+
+**Decision.** A third category of guarded field. `COMPUTED_FIELDS` is what the
+sweep owns; `VERIFICATION_FIELDS` is what a verification owns; `EXTRACTED_FIELDS`
+= `{claims, claims_of}` is what an extraction owns. `ops._guard` refuses all
+three, and `ops.record_ledger` is the only writer — the same shape as
+`record_verification` being the only writer of `verified_against`.
+
+**Why not put it in `COMPUTED_FIELDS`.** That set is what `persist_computed`
+rewrites on every sweep. A ledger is not derivable from the graph — it takes a
+model call — so a sweep would have to either destroy it or skip it, and a set
+whose members are treated differently is not a set.
+
+**"Regenerated when the proof text changes" needs a second field.** There is
+nothing on a node that says which proof a ledger describes, so `claims_of` holds
+the hash of the proof text it was extracted from. When they disagree, `LED100`
+says so and `bp verify` re-extracts. Without it, staleness would be undetectable
+and a ledger would silently keep describing text that is no longer in the file —
+failing open, which is the dangerous direction.
+
+**To reverse.** Drop `claims_of`, re-extract unconditionally on every verify, and
+pay for a call per node per run.
+
+---
+
+## D044 — `LED100`: a stale ledger warns, and does not block
+
+**Date** 2026-07-29 · **Milestone** Addendum A
+
+Addendum A specifies `LED001`–`LED006` and says nothing about a ledger that has
+gone out of date. It happens on every proof edit, so it needed an answer.
+
+**Decision.** A warning, `LED100`, and it does **not** contribute to the
+verification record's `deterministic.ledger` verdict. That verdict is `pass`,
+`fail` or `not_run` on the basis of *errors* only, and staleness is reported
+separately as the absence of a current ledger.
+
+**Why not an error.** The addendum's derivation rule is explicit — `verified`
+requires zero deterministic errors, zero unsourced claims, no confirmed
+objections, no flagged obligations — and making staleness an error would add a
+fifth condition the addendum did not ask for. At `standard` and `deep` the
+question does not arise, because extraction runs and refreshes the ledger before
+the audit reads it. At `quick` no ledger is consulted at all and the record says
+`ledger: not_run`.
+
+**Why not silent.** A stale ledger means `LED001` is describing text that is no
+longer in the file. That is exactly the *failing-open* shape this codebase has
+been bitten by before, so it is visible in `bp check`, on the node panel, and in
+`bp show`.
+
+**To reverse.** Promote it to an error and add a sixth conjunct to
+`verification.implied_status`.
+
+---
+
+## D045 — One `obligation` role answers both narrow entailment jobs
+
+**Date** 2026-07-29 · **Milestone** Addendum A
+
+Addendum A asks for model tiering — "obligation and claim checks on a mid model" —
+and lists the roles as six: `decompose`, `check`, `extract`, `verify`, `audit`,
+`prove`. Those are the role *modules*. The registry names *backend* roles, and the
+two lists are not the same length.
+
+**Decision.** Nine backend roles: `decomposer`, `checker`, `extractor`,
+`obligation`, `verifier_a`, `verifier_b`, `confirmer`, `auditor`, `prover`. One
+`obligation` role answers both discharge obligations and ledger claims.
+
+**Why one and not two.** They are the same shape of question — a record in, a
+yes/no with a reason out, no proof context — and the addendum itself tiers them
+together. Two knobs that would always be set alike are not two knobs. Splitting
+them later is one line in `bp/roles/verify.py`.
+
+**Why `confirmer` is its own role rather than reusing `verifier_a`.** The
+addendum puts confirmation on the strong model alongside the whole-proof pass, and
+confirmation is the one call whose absence is *worse than not running the
+verifier at all* — without it the objection list is pedantry, the user stops
+reading it, and the real finding goes too. It deserves a line in `bp.yaml` that
+someone can see, rather than being an invisible reuse of another role's config.
+
+---
+
+## D046 — Confirmation runs at every level, not only at `deep`
+
+**Date** 2026-07-29 · **Milestone** Addendum A
+
+Two parts of Addendum A pull in different directions. Part 3: "Do not skip
+[confirmation]." Part 5's table puts "confirmation on everything" only at `deep`.
+
+**Decision.** Confirmation runs at all three levels, on every objection that
+exists at that level. `LEVEL_JOBS` includes `confirm` in `quick`, `standard` and
+`deep`.
+
+**Why.** "Confirmation on everything" is satisfied by this reading, because at
+`deep` there is more to confirm: claim-check objections and the statement audit
+only exist there. The other reading — no confirmation at `quick` — would make the
+cheapest and most-used level the one whose output is least worth reading, which is
+backwards. It also costs nothing when a proof is clean: confirmation is one call
+per objection and zero objections is zero calls.
+
+---
+
+## D047 — A run that does not read the proof cannot record a verdict
+
+**Date** 2026-07-29 · **Milestone** Addendum A
+
+`bp verify --obligations-only` predates the record. With `local_status` now
+derived, an obligations-only run produces a record with an empty `whole_proof`
+block, which `implied_status` reads as "nobody looked at this proof" and returns
+`flagged`.
+
+**Decision.** Refuse up front. `verify(record=True)` with no whole-proof pass
+raises before spending anything and says to pass `--no-record`.
+
+**Why not just record the `flagged`.** A node whose obligations all passed and
+whose proof nobody read is not a node with an objection. Writing `flagged` there
+would be a lie in the pessimistic direction, and pessimistic lies are still lies —
+they train the user to ignore the colour. The old behaviour (verdict from flags
+alone, so an obligations-only run could write `verified`) was a lie in the
+dangerous direction.
+
+**Why refuse rather than silently switch to `--no-record`.** The user asked for
+a verification. Quietly giving them a report instead is the kind of helpfulness
+that gets discovered three weeks later.
+
+---
+
+## D048 — `--batch` fails an unanswered question closed
+
+**Date** 2026-07-29 · **Milestone** Addendum A
+
+Addendum A requires `--batch N` with default 1 and notes that batching trades
+reliability for cost. The failure it trades away needed a defined behaviour: a
+batched reply that answers eight of ten questions.
+
+**Decision.** Every record in the chunk is matched to a verdict by its `id`. A
+record with no verdict gets `entails: false`, with a reason naming the batching
+and telling the user to re-run at `--batch 1`.
+
+**Why closed and not skipped.** An unanswered question is not a pass. Skipping it
+would break the coverage guarantee that is the entire point of generating the
+worklist deterministically — the record would say `total: 10, verified: 8` and
+`implied_status` would still call the node verified. Failing closed is noisy in
+exactly the way that gets the user to stop batching, which is the correct
+response.
+
+**Why not retry the missing ones individually.** It doubles the worst-case cost of
+the thing the user chose in order to reduce cost. `--batch 1` is right there.
+
+---
+
+## D049 — The statement auditor writes a note, never a status
+
+**Date** 2026-07-29 · **Milestone** Addendum A
+
+**Decision.** Findings become one note on the node and one line
+(`statement_audit: pass | flagged | not_run`) on the verification record. The
+`statement_audit` line does **not** enter `implied_status`.
+
+**Why it must not block.** This role stands in for `VAC` and `CST`, and it is
+weaker than both in a specific way: a scope check walks a declared table and is
+complete, while the auditor reads and is not; a vacuity check constructs a
+witness, while the auditor asserts one. A weak check that blocks trains the user
+to override it, and a check the user overrides by habit is worse than no check.
+So its verdicts are prompts for attention. `ARCHITECTURE.md` §0 says this to the
+user in those words.
+
+**Why it is still worth the call.** Question 4 — does a constant depend
+transitively on something the statement treats it as uniform in — catches the
+classic bootstrap error, and that error invalidates a whole argument rather than
+one step of it.
+
+**To reverse.** Add `record.statement_audit != "flagged"` to `implied_status` and
+be prepared for the override habit.
+
+---
+
+## D050 — Unsourced claims are not sent to a verifier
+
+**Date** 2026-07-29 · **Milestone** Addendum A
+
+Addendum A: "Emit one obligation record per ledger claim whose source is not
+`none`."
+
+**Decision.** Followed exactly, and worth recording *why*, because the opposite
+looks helpful. `LED001` has already decided an unsourced claim, deterministically.
+Sending it to a model would be asking for an opinion on a settled question — and
+inviting the model to unsettle it by supplying a source the prose never offered,
+which is precisely the failure the extractor's prompt spends a paragraph
+forbidding.
+
+The same reasoning is why `ADMITTED` discharges are not sent either. In both cases
+the author has already said the thing is unsourced; there is nothing to check, and
+the sweep already carries it as visible debt.

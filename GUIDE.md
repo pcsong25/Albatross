@@ -22,6 +22,22 @@ blue-green, the certificate lists exactly what it rests on. You are still the
 mathematician. This is the filing system, and the point of a good filing system
 is that you can stop holding forty things in your head.
 
+Read a green node as exactly this:
+
+> **No agent found a problem in N enumerated checks at level L.**
+
+Never as *proved*. Each node carries a record of what was actually checked — the
+level, the counts, which model answered — and `bp show`, the browser and the
+rendered document all print it, so you never have to guess how much scrutiny a
+lemma received. A node verified at `quick` and one verified at `deep` are not
+making the same claim. `ARCHITECTURE.md` §0 is the full account, in one page,
+and it is worth reading once.
+
+What *is* guaranteed absolutely is the accounting: the graph is acyclic, status
+propagates correctly, a verification dies when anything it depended on moves, and
+**every hypothesis and every load-bearing claim has a named source or there is a
+hard error.** That last one is the check that earns its keep.
+
 Two things it is deliberately not: it is not a theorem prover, and it is not a
 document you edit. The LaTeX is regenerated from the graph every time, so it
 cannot drift into a plausible fiction of your own proof.
@@ -173,17 +189,43 @@ find that out now for the price of a few cheap calls rather than after three
 weeks in the hard branch. A prover that declines, with a reason, is the most
 valuable output it produces.
 
-**6. Verify.** **Verify** runs the panel on a node: every discharge obligation
-one at a time, then two models from different families reading the whole proof,
-then a confirmation pass that drops objections which dissolve in context.
+**6. Extract the claims.** **Extract claims** lists every load-bearing claim the
+proof makes with the source your prose offers, and `LED001` fires on every one it
+has no source for. This is the same device as the discharge table, pointed at what
+the proof asserts on its own account — see §8a. It is one cheap call and it is
+where premise smuggling shows up.
 
-**7. Recompile periodically.** **Recompile** re-verifies everything stale or
-unverified. It shows you the bill first and will not spend without confirmation.
+**7. Verify.** **Verify** asks you for a level first, because the level is part of
+what the verdict *means*:
 
-**8. Read the document.** **Render LaTeX** gives you the source, a `.tex`
+- `quick` — the deterministic checks and the whole proof read by two models from
+  different families. Fast; use it while you are still moving.
+- `standard` — adds claim extraction, the ledger audit, and every discharge
+  obligation asked one at a time. This is the routine setting.
+- `deep` — adds a check on every sourced claim and a statement audit. Roughly
+  fifteen calls on a ten-claim proof. Run it before you trust a subtree.
+
+Whatever the level, every objection then goes through a confirmation pass that
+drops the ones which dissolve in context. Withdrawn objections become notes rather
+than vanishing, so you can see what was considered.
+
+The node then shows a **verification record**: the level, how many questions there
+were, how many were answered, how many came from cache, and which model answered
+each job. Read it. It is the difference between "green" and "green, and here is
+what that cost you".
+
+**8. Recompile periodically.** **Recompile** re-verifies everything stale or
+unverified, at a level you pick. It prices each level before you commit and will
+not spend without confirmation. Unchanged questions come from cache, so a
+recompile after a small edit is much cheaper than the first one.
+
+**9. Read the document.** **Render LaTeX** gives you the source, a `.tex`
 download, and a compiled PDF. Unproved nodes carry a visible marker; admitted
 ones are boxed and labelled as assumptions; the support certificate is at the
-top. `--clean` strips all of that — that version is the paper.
+top. Each checked node also carries one line saying what was verified and at what
+level, so reading the document tells you how much scrutiny each lemma got.
+`--audit` adds the discharge tables and the ledger. `--clean` strips all of it —
+that version is the paper.
 
 ---
 
@@ -331,6 +373,24 @@ support: [gclm.energy-lower-bound]
 blocked_by: []
 statement_hash: '5a07832c405d'
 verified_against: {self: '5a07832c405d', gclm.elb-a: '27260e7d162d'}
+
+# The claim ledger (§8a). Written by `bp extract`; never by hand.
+claims:
+  - id: c1
+    text: "\\partial_x\\omega(t,0) < 0 \\text{ on } [0,T_{\\max})"
+    source: {kind: child, ref: gclm.elb-a}
+claims_of: '9f31c0aa72be'    # the proof this ledger describes
+
+# What was actually checked. `local_status` is DERIVED from this, not written.
+verification:
+  checked_at: '2026-08-03T14:22:00+00:00'
+  level: standard
+  deterministic: {integrity: pass, children_used: pass, discharge: pass, ledger: pass}
+  ledger: {claims: 1, unsourced: 0, checked: 0, flagged: 0, cached: 0}
+  obligations: {total: 5, verified: 5, flagged: 0, cached: 3}
+  whole_proof: {verifier_a: no_objection, verifier_b: no_objection}
+  statement_audit: not_run
+  models: {extractor: haiku-4.5, obligation: sonnet-5, verifier_a: opus-5}
 stale: false
 ---
 
@@ -357,7 +417,15 @@ Things worth knowing:
   it into a cross-reference.
 - **Hash values must be quoted.** `896e63762324` is a valid YAML float. The
   system always writes them quoted and refuses to load one that came back as a
-  number.
+  number. Timestamps too: `2026-08-03T14:22:00+00:00` unquoted comes back as a
+  date object and the file will not load.
+- **`local_status` is the one status you may set by hand**, and only two ways:
+  `bp admit` and `bp assume`, each of which requires a reason. Otherwise it is
+  derived from `verification`, and a role that tried to write it directly would be
+  refused. `global_status` is never yours to write.
+- **`claims` and `verification` are computed too.** `bp extract` writes the first,
+  `bp verify` the second. Editing them by hand is refused, because a ledger you
+  could edit would let the thing making a claim decide the claim is sourced.
 - If you hand-edit, run `bp sweep` afterwards (or just open the UI, which shows
   current values; `bp check` reports `SYS001` when the file is out of date).
 
@@ -397,6 +465,78 @@ nodes.** That is the single most important sentence in this guide.
 
 ---
 
+## 8a. The claim ledger — the same idea, for what the proof asserts itself
+
+The discharge table covers the hypotheses of the lemmas you *cite*. It says
+nothing about what a proof claims on its own account. This:
+
+> By standard elliptic regularity, $\omega \in C^1$, hence…
+
+is a load-bearing claim with no child, no hypothesis, and no entry anywhere. At
+research level that is the most common way a gap hides, and it hides *well*,
+because the sentence reads like an argument.
+
+`bp extract <node>` — the *Extract claims* button — reads the proof with a cheap
+model and lists every load-bearing claim with the source your prose offers:
+
+```yaml
+claims:
+  - id: c1
+    text: "\\omega \\in C^1([0,T))"
+    source: {kind: literature, ref: standard elliptic regularity}
+  - id: c2
+    text: "\\|\\omega(t)\\|_{H^s} \\le \\varepsilon_0 \\text{ for } t < T"
+    source: {kind: child, ref: mff.elb-b}
+  - id: c3
+    text: "the map \\Phi is a contraction on B_R"
+    source: {kind: none, ref: ""}       # <- LED001 fires on this one
+```
+
+That last entry is the point. `kind: none` is the **correct** answer for a claim
+your prose simply asserts, and `LED001` turns every one of them into a hard error
+you will see in `bp check`. The extractor is told at length that inventing a
+plausible source is the one thing it must never do, because that converts a visible
+gap into an invisible one.
+
+Do not hand-edit `claims`. It is computed: it is regenerated when the proof text
+changes, and `LED100` tells you when it has gone out of date. `bp verify` at
+`standard` or above re-extracts for you.
+
+**What the audit does and does not do.** Same shape as §8. It guarantees every
+claim *in the ledger* has a named source. It does not guarantee the ledger is
+**complete** — a claim the extractor did not notice is invisible to `LED001`. If
+the whole-proof pass ever objects to a step that is not in the ledger, that is
+the one gap this design is least protected against; say so in your friction log.
+
+Whether each named source actually *gives* its claim is a separate question, asked
+one claim at a time at `bp verify --level deep`.
+
+---
+
+## 8b. Auditing a statement
+
+`bp audit <node>` — the *Audit statement* button — asks four fixed questions about
+a statement, with no proof in view:
+
+1. Is every symbol bound, and is the conclusion unambiguous?
+2. Can you write down one concrete instance satisfying **every** hypothesis? (If
+   not, the statement may be vacuous — true, and proving nothing.)
+3. Are the quantifiers in the order you meant?
+4. Does any constant depend, directly or transitively, on something the statement
+   treats it as uniform in?
+
+Question 4 is the reason to run it. That is the classic bootstrap error, and it
+invalidates a whole argument rather than one step of it.
+
+**Its answers are prompts for your attention, not checks.** They become a note on
+the node and one line on the verification record; nothing blocks on them. This role
+is standing in for two deterministic checks that are not built yet, and it is
+weaker than both: it finds a circular constant by *reading*, so it finds some, and
+its "a witness exists" is an assertion rather than a witness. A clean audit is
+mildly reassuring and nothing more.
+
+---
+
 ## 9. Models, and what it costs
 
 `bp.yaml` says which model plays which role. The system never names a model in
@@ -407,13 +547,26 @@ agents:
   roles:
     decomposer: {backend: codex_cli,  model: default}
     checker:    {backend: claude_cli, model: opus}
+    extractor:  {backend: claude_api, model: claude-haiku-4-5}
+    obligation: {backend: claude_api, model: claude-sonnet-5}
     verifier_a: {backend: claude_cli, model: opus}
     verifier_b: {backend: openai_api, model: gpt-5.6}
+    confirmer:  {backend: claude_cli, model: opus}
+    auditor:    {backend: claude_cli, model: opus}
     prover:     {backend: claude_cli, model: sonnet}
 budget:
   per_recompile_usd: 3.0
   max_calls_per_recompile: 40
 ```
+
+**The tiering is deliberate and it is where the bill is decided.** `extractor` is
+doing translation, so it goes on the cheapest thing you have. `obligation` answers
+the narrow one-question-at-a-time checks — both hypothesis discharges and ledger
+claims — and at `--level deep` it is most of the calls, so a mid model there is the
+single biggest lever on cost. The four that need a whole argument in view
+(`verifier_a`, `verifier_b`, `confirmer`, `auditor`) want the strongest model you
+have; do not economise on `confirmer` in particular, because without confirmation
+the objection list is mostly pedantry and you will stop reading it.
 
 Backends:
 
@@ -437,6 +590,29 @@ the **call cap** is the only thing limiting a run. Keep it set.
 **API is much faster than a subscription CLI** — seconds against minutes on a
 decomposition prompt. If you have a key, use it for the decomposer at least.
 
+**`--level` is the cost control, not the budget cap.** A budget cap stops a run;
+a level decides how much the run costs in the first place.
+
+| `--level` | Runs | Use for |
+|---|---|---|
+| `quick` | the deterministic checks and the whole-proof pass | while you are iterating |
+| `standard` (default) | + claim extraction, the ledger audit, every hypothesis discharge | routine work |
+| `deep` | + a check on every sourced claim, + the statement audit | before you trust a subtree, or write it up |
+
+A ten-claim proof is roughly fifteen calls at `deep`, so a thirty-node graph is
+several hundred. Always look at `bp recompile --dry-run --level deep` before
+running it; it prints the nodes, the jobs per node, the call count and a cost.
+
+Two things make repeated runs cheap. **Nothing is re-billed**: every question
+carries a content hash and an unchanged question is answered from cache, so editing
+one paragraph does not re-verify the rest of a proof. And **the order is by value**
+— the path to your target first, then the frontier — so a run you stop early has
+bought the useful half.
+
+`--batch N` puts N narrow checks in one call. It defaults to 1 and should stay
+there unless cost is genuinely hurting: a model asked ten questions at once answers
+each less carefully, and that is the reliability the whole design is built to buy.
+
 **Every call is logged** to `.bp/agent/`. `bp calls` summarises it;
 `bp calls --show <hash>` prints one in full — the exact prompt and the exact
 reply. Any command with `--replay` resolves from that log instead of the network,
@@ -458,7 +634,7 @@ Deterministic — no key, no network, no configuration:
 | `bp frontier` | what to work on next |
 | `bp why [id]` | the status chain, in English |
 | `bp check [--format json]` | every check. Exit 1 on error |
-| `bp obligations [id]` | the obligation list as JSON |
+| `bp obligations [id] [--kind discharge\|claim\|all]` | the worklists as JSON: one record per discharge, one per sourced claim |
 | `bp render [--clean] [--audit] [-o F]` | the LaTeX document |
 | `bp events` / `bp jobs` / `bp calls` | history |
 | `bp sweep` | re-derive and persist the computed fields |
@@ -473,9 +649,11 @@ Agents — these call models and cost time or money:
 | `bp expand <id> [--hint "…"]` | decompose one level |
 | `bp redo <id> [--hint "…"]` | archive the subtree and decompose again |
 | `bp check-decomp <id>` | the two checker calls |
-| `bp verify <id> [--no-record]` | obligations, panel, confirmation |
+| `bp extract <id>` | build the claim ledger, then audit it |
+| `bp verify <id> [--level L] [--batch N] [--no-record]` | the three jobs the level calls for, then confirmation |
+| `bp audit <id>` | the four statement questions. Never changes a status |
 | `bp prove <id> [--force]` | write a proof for an easy leaf |
-| `bp recompile [--dry-run]` | verify everything stale or unverified |
+| `bp recompile [--level L] [--dry-run] [--budget N] [--batch N]` | verify everything stale or unverified |
 | `bp resume [job_id]` | continue an interrupted recompile |
 | `bp ui [--port N] [--vendor] [--replay]` | the web interface |
 
@@ -493,11 +671,18 @@ Be clear-eyed about the gaps. Each is a known deferral with a row in
 `UPGRADE.md`.
 
 - **Misattributed discharges** — see §8. The verifier is asked; the check is not.
+- **Whether the claim ledger is complete** — see §8a. Every claim *in* it is
+  sourced or errors; a claim the extractor never listed is invisible. This is the
+  gap the design is least protected against, and the tell is a whole-proof
+  objection about a step that is not in the ledger.
 - **Constant circularity and uniformity.** If $\varepsilon_0$ depends on
-  something that depends on $\varepsilon_0$, nothing here sees it. This is the
-  classic bootstrap error and it is the next check worth adding.
+  something that depends on $\varepsilon_0$, nothing *checks* it. `bp audit`
+  question 4 now asks, which means the error is no longer completely invisible —
+  but it is found by reading, so it is found sometimes. A real scope check walks a
+  declared table and is complete; it is still the next check worth adding.
 - **Vacuous hypotheses.** A lemma whose hypotheses cannot all hold looks fine —
-  it *is* fine, vacuously — and the theorem below rests on nothing.
+  it *is* fine, vacuously — and the theorem below rests on nothing. `bp audit`
+  question 2 asks for a witness, but an asserted witness is not a checked one.
 - **Wrong constants and sign errors** in explicit inequalities. There is no
   numeric sweep.
 - **Cosmetic edits invalidate verification.** There is no LaTeX normalisation, so

@@ -20,13 +20,11 @@ model failed to notice it needed checking.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from typing import Any
 
 from .diagnostics import Diagnostic, err, info, warn
-from .hash import canonical_statement
+from .hash import canonical_statement, content_hash
 from .model import Node
 
 #: The recognised discharge source forms. ``DOTALL`` so that a ``proof:`` source
@@ -194,23 +192,23 @@ def _source_text(node: Node, kind: str, arg: str, graph) -> str:
 
 
 def obligation_hash(record: dict[str, Any]) -> str:
-    """Content hash of an obligation, over what it *asks*, not where it sits.
+    """Content hash of a discharge obligation, over what it *asks*.
 
     Verifier results are cached on this, so the hash must move when the question
     changes and stay put when it does not — otherwise editing one paragraph of a
     proof re-bills every obligation in the node.
     """
-    payload = {
-        "parent": record["parent"],
-        "child": record["child"],
-        "hypothesis": record["hypothesis"],
-        "applied_to": canonical_statement(record["applied_to"]),
-        "needed": canonical_statement(record["needed"]),
-        "claimed_source": canonical_statement(record["claimed_source"]),
-        "source_text": canonical_statement(record["source_text"]),
-    }
-    blob = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+    return content_hash(
+        {
+            "parent": record["parent"],
+            "child": record["child"],
+            "hypothesis": record["hypothesis"],
+            "applied_to": canonical_statement(record["applied_to"]),
+            "needed": canonical_statement(record["needed"]),
+            "claimed_source": canonical_statement(record["claimed_source"]),
+            "source_text": canonical_statement(record["source_text"]),
+        }
+    )
 
 
 def obligations_for(node: Node, graph) -> list[dict[str, Any]]:

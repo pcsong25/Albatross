@@ -1,13 +1,132 @@
 # ARCHITECTURE.md — what Albatross currently is
 
-Written for someone who has never seen the code. Current as of **L1**: the
-deterministic core plus the agent layer. There is no web interface yet; that is
-L2.
+Written for someone who has never seen the code. Current as of **L2**: the
+deterministic core, the agent layer, and the web interface.
 
 Sections 1–11 are the deterministic core. Nothing in them calls a model, and all
 of it runs with no key, no network and no configuration. Sections 12–14 are the
 agent layer. Everything there is built *on top of* the core and never around it:
 an agent proposes, the core checks, and the core decides what the graph says.
+
+**Read section 0 first.** It is what the system guarantees and what it does not,
+and it is the only section that matters if you are deciding how much to trust a
+green node.
+
+---
+
+## 0. What this guarantees, and what it does not
+
+The governing principle, and everything below is a consequence of it:
+
+> **Agents supply judgement. Code supplies the guarantee that the judgement was
+> complete.**
+
+Whether a claim is true cannot be checked deterministically. That every claim was
+enumerated, assigned a source, and dispatched to a verifier *can* be, and is.
+
+| Question | Answered by |
+|---|---|
+| Do the children exist, is the graph acyclic | code |
+| Is every child mentioned in the proof | code |
+| Does every child hypothesis have a named source | code (`DIS011`) |
+| Does the named source actually give that hypothesis | **agent** — obligation check |
+| Is every load-bearing claim in the proof sourced at all | code (`LED001`), over an agent-produced ledger |
+| Is each sourced claim justified by its source | **agent** — claim check |
+| Does the parent follow from the children's conclusions | **agent** — whole-proof pass |
+| Is the statement well-posed, non-vacuous, correctly quantified | **agent** — statement audit |
+| Which nodes are proved, given all of the above | code — propagation sweep |
+
+### What the deterministic layer guarantees
+
+These hold absolutely. They are properties of the code, they are asserted after
+every sweep, and no agent can affect them:
+
+- **The graph is acyclic**, and every citation resolves to a node that exists and
+  is active (`REF001`–`REF008`).
+- **Status propagation is correct.** `global_status` is derived, in one pass, from
+  the `local_status` opinions beneath it. A node marked `proved` has no
+  descendant that is not `proved` or `proved_modulo`, an empty support set, and
+  carries every admitted step its children carry. `bp/propagate.py` asserts all
+  of that in production, not just in tests.
+- **A verification is invalidated when anything it depended on changes.** Each
+  verification records the statement hash of the node and of every child. Move
+  any of them and the node is `blocked:stale`. Hashing is over raw text, so it
+  over-invalidates rather than under-invalidates; that is the safe direction.
+- **Every child hypothesis has a named source or there is a hard error.** No
+  exceptions, no defaults, no silence. A hypothesis you cannot source has to be
+  written `ADMITTED: <reason>`, which is visible debt that propagates into the
+  support certificate (`DIS010`–`DIS017`).
+- **Every extracted claim has a named source or there is a hard error.** Same
+  rule, applied to what the proof asserts on its own account (`LED001`–`LED006`).
+- **Every source produced an obligation record, and every record was
+  dispatched.** The worklists come from `bp/discharge.py` and `bp/ledger.py`, not
+  from a model deciding what is worth checking. Nothing is skipped because a
+  model failed to notice it needed checking, and the record on the node says how
+  many questions there were and how many were answered.
+- **No agent writes a status.** `local_status` is set only by an explicit human
+  decision (`bp admit`, `bp assume`) or *derived* from the verification record by
+  `bp/verification.py`. `ops.record_verification` re-derives it and refuses a
+  verdict that disagrees with its own record.
+- **The document is regenerated from the node files, every time.** It holds no
+  state and cannot drift from the graph.
+
+That is complete bookkeeping, and it contains **no mathematical content
+whatsoever**. Not one of those guarantees says anything is true.
+
+### What the agent layer contributes, and its ceiling
+
+Every mathematical judgement in the system. All of it.
+
+The design does what can be done about that: it makes each question as narrow as
+possible, and it enumerates the questions deterministically. A model asked "does
+`H1` give `H2` for this object" with nothing else in view is in a much better
+position than a model asked "is this proof correct", and a clean verdict over a
+generated worklist means *all N enumerated checks passed* rather than *nothing
+caught my eye*. Narrow questions with a complete worklist is the best available
+configuration for LLM verification.
+
+**It remains unsound.** Reported false-positive rates for LLM verification sit in
+the same band across cross-model and conjunction-of-verifier setups, which is why
+the response to disappointing verification is to narrow the questions further or
+add a deterministic check — never to add a fourth model.
+
+So:
+
+> **A green node means "no agent found a problem in N enumerated checks at level
+> L". It never means proved.**
+
+The verification record exists so that this is legible rather than hidden. It
+names the level, the counts, and the models, and `bp show`, the browser and the
+rendered LaTeX all print it. A node verified at `quick` and one verified at
+`deep` are not making the same claim, and collapsing them to one colour would be
+dishonest in exactly the place this system must not be.
+
+### Where the agent substitutes are weakest
+
+The **statement auditor** (§13, `bp/roles/audit.py`) stands in for the
+deterministic `VAC` and `CST` checks in `DESIGN.md` §8, which v0 defers. It is
+weaker than both, in specific ways worth knowing:
+
+- A constant-scope check walks a declared dependency table and finds a circular
+  constant dependency *mechanically*. The auditor finds one by reading, so it will
+  miss some. Question 4 catches the classic bootstrap error often enough to pay
+  for the call, but "it found nothing" is not "there is nothing".
+- A vacuity check exhibits a witness or reports the constraint system
+  unsatisfiable. The auditor's answer is an **assertion**, and an assertion that a
+  witness exists is not a witness. This is why its schema forces it to write the
+  witness down and to distinguish `exhibited` from `not_found` from
+  `out_of_reach`.
+
+Its verdicts are therefore **prompts for the user's attention, not checks**.
+Nothing in the system blocks on them: they become a note on the node and a line
+on the record.
+
+The other soft spot is the **extractor**. The ledger's guarantee is that every
+claim *in the ledger* is sourced or errors — not that the ledger is complete. A
+load-bearing claim the extractor did not list is invisible to `LED001`. That is
+why the prompt is written the way it is, why the role reports what it
+deliberately omitted, and why extraction is a translation task on a cheap model
+rather than a judgement task.
 
 ---
 
@@ -49,7 +168,9 @@ nodes/*.md
     ▼
  derived fields          global_status, support, blocked_by, stale, statement_hash
     │
-    ├── bp/checks.py     integrity + discharge + hygiene → Diagnostics
+    ├── bp/checks.py     integrity + discharge + ledger + hygiene → Diagnostics
+    ├── bp/discharge.py  the `uses` table → one obligation record per discharge
+    ├── bp/ledger.py     the `claims` ledger → one record per sourced claim
     ├── bp/why.py        the derived fields, as English
     ├── bp/render.py     the derived fields, as a LaTeX document
     └── bp/load.py       persist_computed writes them back into the files
@@ -65,6 +186,19 @@ bp/agents/            one model call: JSON, validated, retried once, logged
 bp/roles/*.py         run the deterministic checks on what came back
     ▼
 bp/ops.py             write it — and the sweep decides what the graph now says
+```
+
+Verification is the same shape, with the worklist generated in the middle:
+
+```
+bp/discharge.py + bp/ledger.py    enumerate the questions — deterministically
+    ▼
+bp/roles/verify.py                three jobs, one narrow question at a time,
+                                  each answer cached on the record's content hash
+    ▼
+bp/verification.py                assemble the record; DERIVE local_status from it
+    ▼
+bp/ops.py                         write it, re-deriving and refusing a mismatch
 ```
 
 Reading commands (`check`, `status`, `why`, `graph`, `show`, `render`,
@@ -114,6 +248,27 @@ support: [gclm.energy-lower-bound]
 blocked_by: []
 statement_hash: '5a07832c405d'
 verified_against: {self: '5a07832c405d', gclm.elb-a: '27260e7d162d'}
+
+# The claim ledger (§6a). Written by `bp extract`, audited by LED001-LED006.
+claims:
+  - id: c1
+    text: "\\partial_x\\omega(t,0) < 0 \\text{ on } [0,T_{\\max})"
+    source: {kind: child, ref: gclm.elb-a}
+  - id: c2
+    text: "-u_x(t,0) \\ge c_a z(t)"
+    source: {kind: child, ref: gclm.elb-b}
+claims_of: '9f31c0aa72be'
+
+# What was actually checked (§13a). `local_status` is DERIVED from this.
+verification:
+  checked_at: '2026-08-03T14:22:00+00:00'
+  level: standard
+  deterministic: {integrity: pass, children_used: pass, discharge: pass, ledger: pass}
+  ledger: {claims: 2, unsourced: 0, checked: 0, flagged: 0, cached: 0}
+  obligations: {total: 5, verified: 5, flagged: 0, cached: 3}
+  whole_proof: {verifier_a: no_objection, verifier_b: no_objection}
+  statement_audit: not_run
+  models: {extractor: haiku-4.5, obligation: sonnet-5, verifier_a: opus-5}
 stale: false
 ---
 
@@ -161,10 +316,18 @@ decomposition out of the graph.
 | `statement_hash` | `propagate.sweep` | §4. |
 | `stale` | `propagate.sweep` | §4. |
 | `verified_against` | `ops.record_verification` **only** | The hashes this node's verification was performed against: `self`, plus each child at that moment. |
+| `verification` | `ops.record_verification` **only** | §13a. What was actually checked, at what level, by which model — and what `local_status` is derived *from*. |
+| `claims` | `ops.record_ledger` **only** | §6a. The claim ledger: every load-bearing claim the proof makes, with its source. |
+| `claims_of` | `ops.record_ledger` **only** | The hash of the proof text the ledger was extracted from. When it stops matching, `LED100`. |
 
 `ops.set_authored` raises `ComputedFieldError` if anything tries to author one of
 these. That is enforcement, not convention: the one thing an agent must never be
-able to do is write its own global status.
+able to do is write its own global status — or its own ledger, or its own
+verification record.
+
+`local_status` is authored, but only in two ways: an explicit human decision
+(`bp admit`, `bp assume`, each requiring a reason) or *derivation* from
+`verification`. No role writes it. §13a.
 
 ### The body
 
@@ -376,6 +539,101 @@ does not re-bill every obligation in the node.
 
 ---
 
+## 6a. The claim ledger — the other half of the same device
+
+The `uses` table covers the **children's** hypotheses. It says nothing about what
+a reduction asserts on its own account. A proof that says
+
+> by standard elliptic regularity, $\omega \in C^1$, hence…
+
+has a load-bearing claim with no child, no hypothesis, and no entry anywhere.
+That is premise smuggling in its purest form, and at research level it is the
+dominant failure mode. The ledger closes it.
+
+`claims` is a list on the node, keyed by id, in the order the proof makes them:
+
+```yaml
+claims:
+  - id: c1
+    text: "\\omega \\in C^1([0,T))"
+    source: {kind: literature, ref: standard elliptic regularity}
+  - id: c2
+    text: "\\|\\omega(t)\\|_{H^s} \\le \\varepsilon_0 \\text{ for } t < T"
+    source: {kind: child, ref: mff.elb-b}
+  - id: c3
+    text: "the map \\Phi is a contraction on B_R"
+    source: {kind: none, ref: ""}
+claims_of: 'f2c1a9b40e77'      # hash of the proof text it was extracted from
+```
+
+`kind` is one of `hypothesis`, `child`, `claim`, `literature`, `computation`,
+`none`. A claim's `text` is a **math-mode fragment**, like a hypothesis's `tex`.
+
+Two things about this field matter more than its contents:
+
+**It is computed.** The extractor role (§13) produces it and
+`ops.record_ledger` is its only writer. A ledger any other role could edit would
+let the model that makes a claim decide the claim is sourced, and `LED001` would
+stop meaning anything.
+
+**It is a function of the proof text.** `claims_of` records the hash of the proof
+it came from. When the proof moves they disagree, and `LED100` says the ledger is
+describing an earlier proof rather than letting a stale audit pass for a current
+one. `bp verify` at `standard` or above re-extracts when that happens, and skips
+extraction entirely when it has not — an unchanged proof means an unchanged
+ledger and there is nothing to buy.
+
+### The audit (`bp/ledger.py`)
+
+| Code | Sev | Catches |
+|---|---|---|
+| `LED001` | error | A claim with `source.kind: none` — an unsourced load-bearing claim |
+| `LED002` | error | A `child` source naming an id that is not in `children` |
+| `LED003` | error | A `hypothesis` source naming an id this node does not have |
+| `LED004` | error | A `claim` source naming a later claim, or itself; or a duplicate claim id |
+| `LED005` | warn | A `literature` source with no identifiable reference — "standard", "well known" |
+| `LED006` | warn | A `computation` source with no artifact path |
+| `LED100` | warn | The ledger was extracted from an earlier version of the proof |
+
+Together with `DIS011`, this means **no load-bearing claim anywhere in a proof
+can go unsourced without producing a hard error.**
+
+A node with no ledger at all produces nothing. That is deliberate: at
+`--level quick` the extractor never runs, and a check that fired on every
+unextracted node would be noise on exactly the nodes the user has not asked about
+yet. What the absence costs is recorded honestly on the node instead, as
+`ledger: not_run`.
+
+`LED005` and `LED006` are warnings rather than errors because a real result
+vaguely cited is still a real result, and the claim check can judge it. Blocking
+on them would train the user to ignore the ones that matter.
+
+### Claim obligations
+
+`bp obligations` emits one record per **sourced** ledger claim, `kind: "claim"`,
+in the same shape as a discharge record and cached in the same namespace:
+
+```json
+{ "id": "ob:mff.energy-lower-bound:claim:c2",
+  "kind": "claim",
+  "parent": "mff.energy-lower-bound",
+  "claim": "c2",
+  "applied_to": "",
+  "needed": "\\|\\omega(t)\\|_{H^s} \\le \\varepsilon_0 \\text{ for } t < T",
+  "claimed_source": "child:mff.elb-b",
+  "source_kind": "child",
+  "source_text": "<statement of mff.elb-b>",
+  "hash": "6b1f0c2ad4e9f715" }
+```
+
+Unsourced claims produce no record. `LED001` has already decided them,
+deterministically; sending one to a model would be asking for an opinion on a
+settled question, and inviting it to unsettle it.
+
+`bp obligations --kind discharge|claim|all` picks the worklist.
+
+---
+
 ## 7. The other checks
 
 **Integrity** (`bp/graph.py`) — the graph is not a graph without these.
@@ -532,11 +790,11 @@ In v0 this is a testing scaffold. The intended daily interface is the L2 web UI.
 | Command | Does |
 |---|---|
 | `bp status` | One line per node: role, local status, global status, what it rests on |
-| `bp show <id>` | Everything about one node, including its discharge table |
+| `bp show <id>` | Everything about one node: discharge table, claim ledger, verification record |
 | `bp graph` | The DAG as a tree, rooted at the target |
 | `bp why [id]` | The status chain in plain English |
 | `bp check [--format json] [--quiet]` | Every deterministic check. Exit 1 on error |
-| `bp obligations [id]` | The obligation list as JSON |
+| `bp obligations [id] [--kind discharge\|claim\|all]` | The worklists as JSON: one record per discharge and per sourced claim |
 | `bp render [--clean] [--audit] [--title T] [-o F] [--stdout]` | The LaTeX document |
 | `bp events [--limit N]` | The event log, human-readable |
 | `bp sweep` | Re-derive and write the computed fields |
@@ -552,9 +810,11 @@ cannot: a missing credential, a budget cap, a model that would not answer.
 | `bp expand <id> [--hint "…"]` | Decompose one level, repairing against the discharge check |
 | `bp redo <id> [--hint "…"]` | Archive the subtree to `attempts/`, decompose again |
 | `bp check-decomp <id>` | The two checker calls |
-| `bp verify <id> [--no-record]` | Obligations, whole proof, confirmation |
+| `bp extract <id> [--no-record]` | Build the claim ledger, then audit it (`LED001`–`LED006`) |
+| `bp verify <id> [--level L] [--batch N] [--no-record]` | The three jobs the level calls for, then confirmation |
+| `bp audit <id> [--no-record]` | The four statement questions. Never touches a status |
 | `bp prove <id> [--force]` | Write a proof for a routine or standard leaf |
-| `bp recompile [--dry-run] [--node id]` | Verify every stale and unverified node |
+| `bp recompile [--level L] [--dry-run] [--budget N] [--batch N] [--node id]` | Verify every stale and unverified node |
 | `bp resume [job_id]` | Continue an interrupted recompile |
 | `bp jobs` / `bp calls [--show hash]` | Job records; the model call log |
 
@@ -576,28 +836,42 @@ offline.
 
 ### Roles, not models
 
-The system talks about *roles* — `decomposer`, `checker`, `verifier_a`,
-`verifier_b`, `prover` — and never about models. Which model plays which role is
-one edit to `bp.yaml`:
+The system talks about *roles* and never about models. Which model plays which
+role is one edit to `bp.yaml`:
 
 ```yaml
 agents:
   roles:
     decomposer: {backend: codex_cli,  model: default}
     checker:    {backend: claude_cli, model: opus}
+    extractor:  {backend: claude_api, model: claude-haiku-4-5}
+    obligation: {backend: claude_api, model: claude-sonnet-5}
     verifier_a: {backend: claude_cli, model: opus}
     verifier_b: {backend: openai_api, model: gpt-5.6}
+    confirmer:  {backend: claude_cli, model: opus}
+    auditor:    {backend: claude_cli, model: opus}
     prover:     {backend: claude_cli, model: sonnet}
 budget:
   per_recompile_usd: 3.0
   max_calls_per_recompile: 40
 ```
 
-That indirection costs a layer and earns two things. It lets the expensive
-verifier move onto a subscription CLI when the bill gets uncomfortable. And it
-lets the two panel verifiers be put on **different model families**, which is the
-whole reason there are two of them — two verifiers from the same lab miss the
-same things.
+That indirection costs a layer and earns three things.
+
+It lets the expensive verifier move onto a subscription CLI when the bill gets
+uncomfortable. It lets the two panel verifiers be put on **different model
+families**, which is the whole reason there are two of them — two verifiers from
+the same lab miss the same things.
+
+And it is where **model tiering** lives, which is the difference between a
+recompile you can afford and one you cannot. `extractor` is doing translation and
+belongs on the cheap model. `obligation` answers the narrow entailment
+questions — both discharge obligations and ledger claims, since they are the same
+shape of question — and is the bulk of the calls at `--level deep`, so it belongs
+on a mid model. `verifier_a`, `verifier_b`, `confirmer` and `auditor` need a whole
+argument in view and belong on the strongest thing available. There is one
+`obligation` role rather than two because two knobs that would always be set
+alike are not two knobs.
 
 ### Backends
 
@@ -668,10 +942,19 @@ question do not collide.
 
 ## 13. The roles
 
-Each role assembles context deterministically (`bp/roles/context.py` — no model
-decides what a model gets to see), asks for JSON, runs the deterministic checks
-on what came back, and writes through `ops`. The prompts live in
-`bp/roles/prompts/*.md` and are meant to be edited.
+Six of them: `decompose`, `check`, `extract`, `verify`, `audit`, `prove`.
+
+Each assembles context deterministically (`bp/roles/context.py` — no model decides
+what a model gets to see), asks for JSON against a pydantic schema, runs the
+deterministic checks on what came back, and writes through `ops`. The prompts live
+in `bp/roles/prompts/*.md` and are meant to be edited: prompt wording is where
+most of the quality lives, and a mathematician should never have to open a `.py`
+file to change what an agent is told.
+
+**No role is ever asked an open-ended validity question.** Every one of them
+consumes a deterministically generated worklist or a fixed list of questions, and
+returns a structured verdict against it. That is not a style preference; it is the
+only reason a clean verdict carries information (§0).
 
 ### Decomposer
 
@@ -738,28 +1021,69 @@ available?* — is deliberately **not** asked here. It already has a better answ
 completeness from `bp/discharge.py`, deterministically; entailment from the
 verifier, one narrow obligation at a time.
 
+### Extractor
+
+Given a proof, return every load-bearing claim with the source the prose offers.
+That is a **translation** task, not a judgement task, which is why it is the cheap
+model and why its output is reliable enough to be a computed field. The value is
+not in the extraction; it is in what `bp/ledger.py` can then say
+deterministically (§6a).
+
+The one failure mode worth engineering against is a model that invents a plausible
+source to look helpful, because that converts a visible gap into an invisible one
+— strictly worse than not running the role. The prompt says so at length: `none`
+is the *correct* answer for a claim the proof simply asserts, and it is the single
+most valuable thing the role produces. Structurally, `none` is also the schema
+default, so an omitted source is unsourced rather than absent.
+
+The role also reports what it deliberately left out, as a note, so a
+suspiciously short ledger is legible rather than mysterious.
+
 ### Verifier
 
-Two jobs, kept apart.
+**Three** jobs, kept apart and separately cached. They exist separately because
+they fail differently; merging them to save calls would give up the only thing
+that makes agent verification worth running. Use `--level` for cost control
+instead.
 
-*Obligation checking.* Consume the obligation list one record at a time: does
+*1. Obligation checks.* Consume the discharge worklist one record at a time: does
 this source give this hypothesis, for this object? No proof search, no strategy,
-no whole-proof context. Narrow questions are where model judgement is most
-reliable, and the list is complete by construction. Results are cached on the
-obligation hash in `.bp/verify/obligations.json`, so editing one paragraph of a
-proof does not re-bill the rest. `ADMITTED` discharges are not sent at all —
-they are already visible debt.
+no whole-proof context. This is the **misattribution** check — the answer to "the
+table says `H2` comes from `H1`, but does it?" `ADMITTED` discharges are not sent
+at all; they are already visible debt.
 
-*Whole-proof pass.* Statement, proof, and the children's statements **as
-assumptions**. Two backends, different families, no shared context.
+*2. Claim checks.* One record per sourced ledger claim, in the same narrow shape:
+does the named source justify this claim, as applied here? This is where premise
+smuggling dies. A claim the prose attributes to a lemma that does not give it
+looks exactly like a claim attributed to a lemma that does — until somebody asks
+about that one claim on its own.
 
-Then a **confirmation pass** over every objection from either job: it is
-re-presented with surrounding context and dropped if the flaw dissolves. This is
-not optional. Without it the output is mostly pedantry, the user stops reading
-it, and the real objection goes with the rest. Withdrawn objections become notes
-on the node rather than disappearing.
+*3. Whole-proof pass.* Statement, proof, and the children's statements **as
+assumptions**. Two backends, different families, no shared context. This catches
+what per-claim checking cannot: gaps *between* individually correct claims, and
+whether the claims collectively reach the conclusion.
 
-Two failure modes are handled explicitly, because both would be silent:
+Both worklists come from code, and that is the point: "no objection" then means
+*all N enumerated checks passed*. Results are cached on each record's content hash
+in `.bp/verify/obligations.json`, so editing one paragraph of a proof does not
+re-bill the rest.
+
+`--batch N` sends N obligation or claim checks per call. **It defaults to 1.**
+Batching trades reliability for cost — a model asked ten questions at once answers
+each less carefully — so it is opt-in everywhere. A batched reply that skips a
+question fails that question closed, with a reason naming the batching: an
+unanswered question is not a pass.
+
+Then a **confirmation pass** over every objection from any of the three: it is
+re-presented with surrounding context, the discharge table and the ledger, and
+dropped if the flaw dissolves. This is not optional at any level. Without it the
+output is mostly pedantry, the user stops reading it, and the real objection goes
+with the rest. Withdrawn objections become notes on the node rather than
+disappearing, and the record downgrades that panel member to
+`objection_withdrawn` — otherwise a dissolved finding would keep the node flagged
+forever.
+
+Three failure modes are handled explicitly, because all three would be silent:
 
 - Running out of budget is **not** a verifier declining to object, so
   `BudgetExceeded` is re-raised rather than caught by the panel's fault
@@ -767,6 +1091,29 @@ Two failure modes are handled explicitly, because both would be silent:
 - If **no** panel member answered, `verify` refuses to record a verdict at all.
   Silence from every verifier is not agreement, and recording `verified` there
   would turn a network outage into a green graph.
+- A run that does not read the proof — `--obligations-only` — cannot record
+  either. It has not verified anything, whatever the obligations said, so it
+  refuses up front and tells you to pass `--no-record`.
+
+### Statement auditor
+
+One call per statement, with **no proof in view** — a proof in the context would
+let the model read the intended meaning off the argument instead of off the words.
+Four fixed questions, each with its own field in the reply:
+
+1. Is the statement well-posed — is every symbol bound, is the conclusion
+   unambiguous?
+2. Exhibit a concrete instance satisfying every hypothesis, or report that you
+   cannot. A statement whose hypotheses cannot be jointly satisfied is vacuous.
+3. Are the quantifiers in the intended order? Flag any `∀ε ∃δ` versus `∃δ ∀ε`
+   ambiguity.
+4. Does any constant depend, directly or transitively, on something the statement
+   treats it as uniform in?
+
+It **never touches a status.** Findings become a note on the node and one line
+(`statement_audit: pass | flagged | not_run`) on the verification record. See §0
+for why it is weaker than the `VAC`/`CST` checks it stands in for, and what that
+means for how much its clean verdicts are worth. Runs at `--level deep`.
 
 ### Prover
 
@@ -812,20 +1159,110 @@ one-line change (`tidy.ROLE`).
 
 ---
 
+## 13a. The verification record
+
+`local_status: verified` must not be an opaque flag. Each node carries a computed
+record of what was actually checked:
+
+```yaml
+verification:
+  checked_at: '2026-08-03T14:22:00+00:00'
+  level: standard
+  deterministic: {integrity: pass, children_used: pass, discharge: pass, ledger: pass}
+  ledger:       {claims: 11, unsourced: 0, checked: 0, flagged: 0, cached: 0}
+  obligations:  {total: 7, verified: 6, flagged: 1, cached: 4}
+  whole_proof:  {verifier_a: no_objection, verifier_b: objection_confirmed}
+  statement_audit: not_run
+  models: {extractor: haiku-4.5, obligation: sonnet-5, verifier_a: opus-5}
+```
+
+`bp/verification.py` assembles it and **derives** `local_status` from it:
+
+```
+verified  ⟺  no deterministic errors
+           ∧ no unsourced ledger claims
+           ∧ no flagged obligations
+           ∧ no flagged claims
+           ∧ no confirmed objections
+           ∧ at least one whole-proof verifier answered
+```
+
+Anything else is `flagged`. Every input is either a deterministic diagnostic or a
+count of agent answers; nothing here is a judgement. `deterministic` values are
+`pass`/`fail`/`not_run`, and `fail` means *this family produced an error* —
+warnings do not fail a node, because a check that blocked on `USE001` would train
+the user to ignore the ones that matter.
+
+**No role may set `local_status` directly.** That is enforced, not trusted:
+`ops.record_verification` re-derives the status from the record it is handed and
+refuses a verdict that disagrees with it. A role that could pass `verified`
+alongside a record full of confirmed objections would be setting the status by the
+back door.
+
+The record's absence is also honest. A node verified before the record existed, or
+by hand, reports "never verified" in the record line rather than claiming a level.
+An empty `ledger` block means no ledger was available — reporting `unsourced: 0`
+from a ledger nobody extracted would be a claim about claims nobody enumerated.
+
+`bp show`, the browser, and the rendered LaTeX all print a compact form. The
+renderer's line is generated text throughout — level names, role names, counts —
+so it goes through `render.escape`, not `render.prose`: `verifier_a` in LaTeX text
+mode is "Missing $ inserted" and no PDF.
+
+---
+
 ## 14. Recompile, jobs and resume
 
 `bp recompile` verifies only what needs it — nodes that are **stale** or
-**unverified with a proof** — and then sweeps. Within that set it works in an
-order that makes a partial run useful: the path to the target first, shallow
-before deep. A partial run should leave the user closer to knowing about their
-theorem, not about an unrelated branch.
+**unverified with a proof** — and then sweeps.
 
-**The bill is previewable.** `--dry-run` prints the nodes, the call count and an
-estimated cost, computed from the prompts that would actually be sent, before any
-of them happen. Confirmation calls are excluded and the preview says so — they
-happen only for objections, and how many there will be is not knowable in
-advance. With subscription backends there is no dollar figure and it reports call
-counts instead of printing a reassuring `$0.00`.
+### Levels
+
+Agent-checking every claim is expensive: a node with a ten-claim proof runs
+roughly fifteen calls at full depth, so a thirty-node graph is several hundred.
+So recompile is tiered rather than being one thing you either can or cannot
+afford.
+
+| `--level` | Runs | Use for |
+|---|---|---|
+| `quick` | deterministic checks, whole-proof pass | fast sanity check while iterating |
+| `standard` (default) | + extraction, ledger audit, obligation checks | routine work |
+| `deep` | + per-claim checks, statement audits | before trusting a subtree, or writing it up |
+
+Confirmation is in **every** level; see §13. `--level` is also the honest name for
+what the levels are: three different claims about a node, which is why the level
+is written onto the record and printed everywhere the status is.
+
+`bp verify --level L` applies the same tiering to one node. Resuming an
+interrupted run keeps the level the run *started* at — it is stored on the job
+record — because finishing a `deep` run at `quick` would leave half the graph
+claiming a scrutiny it did not get.
+
+### Cost control
+
+**Nothing is re-billed.** Every obligation and claim record carries a content
+hash, and an unchanged record is answered from cache. Extraction is skipped
+outright when `claims_of` already matches the proof on file.
+
+**Model tiering.** Extraction on the cheap model, obligation and claim checks on a
+mid model, whole-proof and confirmation on the strong one. All nine roles are
+configurable in `bp.yaml`; the registry's defaults say the same thing.
+
+**`--batch N`** sends N narrow checks per call, default 1. See §13.
+
+**`--budget N`** caps the run at N model calls, replacing the configured caps.
+
+**Value ordering.** The path to the target first (shallow before deep, since a
+decomposition near the target may reshape everything under it), then the frontier
+— the nodes where work is actually possible right now — then everything else. A
+run stopped by `--budget` should have spent its money where it mattered.
+
+**The bill is previewable.** `--dry-run` prints the nodes, the per-node jobs, the
+call count and an estimated cost, computed from the prompts that would actually be
+sent, before any of them happen. Confirmation calls are excluded and the preview
+says so — they happen only for objections, and how many there will be is not
+knowable in advance. With subscription backends there is no dollar figure and it
+reports call counts instead of printing a reassuring `$0.00`.
 
 **Results write as they land**, through `ops`, so an interrupted run keeps
 everything it paid for.
@@ -957,8 +1394,9 @@ locking row in `UPGRADE.md`, and L2 is what makes it easy to hit.
 
 | Jobs | |
 |---|---|
-| `POST /api/jobs/{expand,redo,check-decomp,verify,prove}/{id}` | returns a job id; `expand` takes `force` to overrule a decline |
-| `POST /api/jobs/{recompile,resume}` | returns a job id |
+| `POST /api/jobs/{expand,redo,check-decomp,extract,audit,verify,prove}/{id}` | returns a job id; `expand` takes `force` to overrule a decline, `verify` takes `level` and `batch` |
+| `GET /api/recompile/plan?level=L` | the dry run, priced; synchronous, since it makes no calls |
+| `POST /api/jobs/{recompile,resume}` | returns a job id; `recompile` takes `level` and `batch` |
 | `GET /api/jobs[/{id}]` | status, step, call count, result |
 
 ---

@@ -539,3 +539,110 @@ decline as a repair round.
 **The user's own file was the best test input available.** Every one of the three
 LaTeX problems was visible in it, and none of them was visible in the fixture I
 had written — because I write `\[…\]` and they write `align`.
+
+---
+
+## Addendum A — the claim ledger, three verifier jobs, and the verification record
+
+**Date** 2026-07-29
+
+### What was built
+
+The addendum's Part 1 was already in (`DIS010`–`DIS017`, obligation emission, the
+decomposer's `uses` table, the checker's third question deleted). Everything from
+Part 2 onward is new.
+
+**`bp/ledger.py` — the claim ledger.** The `uses` table covers the children's
+hypotheses. It says nothing about what a reduction asserts on its own account, and
+"by standard elliptic regularity, $\omega \in C^1$, hence…" is a load-bearing
+claim with no child, no hypothesis and no entry anywhere. `claims` is now a list on
+the node, one entry per load-bearing claim with the source the prose offers, and
+`LED001`–`LED006` audit it. Together with `DIS011` the result is the sentence worth
+remembering: **no load-bearing claim anywhere in a proof can go unsourced without a
+hard error.**
+
+Written against a hand-written fixture, as the addendum asks — the audit is
+demonstrable with no model in the loop, and `tests/test_ledger.py` never calls one.
+
+**Two computed fields, with their own writer.** `claims` and `claims_of` join
+`verified_against` in the category of "derived, but not by the sweep".
+`ops.record_ledger` is the only writer. `claims_of` holds the hash of the proof the
+ledger came from, which is what makes staleness detectable at all (`LED100`).
+
+**`bp/roles/extract.py` — the extractor.** Cheap model, because listing what a
+proof asserts is *translation*, not judgement. The prompt spends a paragraph on the
+one unacceptable outcome: inventing a plausible source converts a visible gap into
+an invisible one, which is worse than not running the role. `none` is both the
+correct answer and the schema default.
+
+**The verifier is three jobs, separately cached.** Obligation checks
+(misattribution), claim checks (premise smuggling), whole-proof pass (gaps
+*between* correct claims). Both worklists come from code. `--batch N` batches the
+narrow ones, default 1, and a batched reply that skips a question fails it closed.
+Confirmation runs at every level.
+
+**`bp/roles/audit.py` — the statement auditor.** Four fixed questions about a
+statement with no proof in view. It writes a note and never a status, because it
+stands in for `VAC`/`CST` and is weaker than both.
+
+**`bp/verification.py` — the record, and the derivation.** `local_status` is now
+*derived* from a record of what was actually checked. `ops.record_verification`
+re-derives it from the record it is handed and refuses a verdict that disagrees —
+so "no role may set `local_status`" is a property of the code rather than a
+convention. `bp show`, the browser and the rendered LaTeX all print the record.
+
+**Recompile is tiered.** `--level quick|standard|deep`, `--batch`, `--budget`,
+`--dry-run` at each level, value ordering that puts the path to the target first
+and then the frontier. Nine roles in `bp.yaml` so extraction, the narrow checks,
+and the whole-proof pass can sit on three different model tiers.
+
+```
+bp check        2 errors — the deliberate DIS011 and the deliberate LED001,
+                on exactly the claim the verifiers had also objected to
+bp obligations  33 records (22 discharge, 10 claim, 1 admitted), hashes stable
+bp render       compiles; --audit compiles too, which it did not before
+pytest -q       388 passed
+```
+
+`bp recompile --dry-run` at the three levels: 4, 5 and 13 calls on the fixture,
+with the cache credited and the per-node jobs named.
+
+### What surprised me
+
+**`verifier_a` does not typeset.** The verification record goes into the LaTeX, and
+role names contain underscores — "Missing $ inserted", no PDF. The record is
+*generated* text throughout (level names, role names, counts, a timestamp), so it
+goes through `render.escape`. This is the fourth time the escape/prose distinction
+has cost something in this repo, and the rule keeps holding: authored text is
+LaTeX and passes through, generated text is not and must be escaped.
+
+**A claim's `text` is a math-mode fragment, and I wrote it as prose first.**
+Exactly the mistake already in `CLAUDE.md` about `Hypothesis.tex`, made again on
+the new field one hour after reading the note about it. Both the renderer and the
+browser now wrap it.
+
+**`--audit` had never compiled.** Fixing my own bug exposed a pre-existing one: two
+`proof:` discharge sources in the fixture contained bare math — `f\in C^1(\mathbb
+S^1)` with no dollars — written by the decomposer months of tokens ago and never
+typeset because nobody had run `bp render --audit` through `pdflatex`. Fixed in the
+fixture, and the decomposer's prompt now says free-text sources are prose and need
+their own dollars. A render path with no compile test is a render path that does
+not work.
+
+**A timestamp is the hex-hash bug wearing a different hat.** `checked_at:
+2026-08-03T14:22:00+00:00` unquoted comes back from YAML as a `TimeStamp`, and
+pydantic refuses it for a `str` field — so the node file would fail to load
+entirely. Same fix as the hashes (`load.quoted`), same lesson: anything
+scalar-shaped going into YAML needs to be asked what it parses back as.
+
+**Two parts of the addendum disagreed about confirmation, and the resolution was
+the cheap one.** Part 3 says never skip it; Part 5's table lists it only under
+`deep`. Running it at every level satisfies both, because at `deep` there is
+strictly more to confirm — and it costs nothing on a clean proof, since zero
+objections is zero calls. `DECISIONS.md` D046.
+
+**`--obligations-only` became incoherent the moment the status was derived.** It
+produces a record with an empty `whole_proof` block, which correctly reads as
+"nobody looked at this proof". The old code computed the verdict from flags alone
+and would happily have written `verified` for a node no verifier had read. Now it
+refuses up front. Deriving the status did not create that bug; it revealed it.
