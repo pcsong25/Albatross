@@ -344,8 +344,17 @@ def render(
     title: Optional[str] = typer.Option(None, "--title"),
     out: Optional[Path] = typer.Option(None, "-o", "--out"),
     to_stdout: bool = typer.Option(False, "--stdout"),
+    pdf: bool = typer.Option(
+        False, "--pdf", help="compile it too, and explain any failure"
+    ),
 ) -> None:
-    """Render the whole graph to a compilable LaTeX document."""
+    """Render the whole graph to a compilable LaTeX document.
+
+    With ``--pdf`` it also runs pdflatex twice and reports what went wrong in
+    terms you can act on — a missing package is named, with the command that
+    installs it. Worth reaching for when the browser says a document will not
+    compile and you want to see it outside the browser.
+    """
     project, graph = _graph(root)
     tex = render_mod.document(
         graph, clean=clean, audit=audit, title=title,
@@ -358,6 +367,29 @@ def render(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(tex, encoding="utf-8")
     console.print(f"wrote {path}")
+    if not pdf:
+        return
+
+    from . import compile as compile_mod
+
+    result = compile_mod.compile_pdf(
+        tex, path.parent, name=path.stem
+    )
+    for warning in result.warnings:
+        console.print(Text(f"warning: {warning}", style="yellow"))
+    if result.ok:
+        console.print(f"wrote {result.pdf}")
+        return
+    problem = result.problem
+    err_console.print(Text(f"the document did not compile: {problem.kind}", style="bold red"))
+    if problem.message:
+        err_console.print(Text(problem.message))
+    if problem.hint:
+        err_console.print(Text(problem.hint, style="dim"))
+    if problem.excerpt:
+        err_console.print()
+        err_console.print(Text(problem.excerpt, style="dim"))
+    raise typer.Exit(code=1)
 
 
 @app.command("events")

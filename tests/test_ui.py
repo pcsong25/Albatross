@@ -694,3 +694,62 @@ class TestLedgerAndRecord:
         job = _wait(client, started["id"])
         assert job["status"] == "done"
         assert job["result"]["level"] == "quick"
+
+
+class TestRenderErrors:
+    """A document that does not compile is a fact about the LaTeX, not a server bug.
+
+    Before this, `/api/render.pdf` raised 500 and the browser reached it by
+    `window.open`, so the useful detail landed in a new tab as raw JSON and the
+    user read "internal server error" — when the actual answer was usually one
+    `tlmgr install` away.
+    """
+
+    def test_the_source_endpoints_do_not_need_latex(self, client, project):
+        small(project)
+        assert client.get("/api/render").status_code == 200
+        assert client.get("/api/render.tex").status_code == 200
+
+    def test_a_document_that_will_not_compile_is_422_not_500(self, client, project):
+        small(project)
+        # An unguarded \usepackage of something that cannot exist: exactly the
+        # shape of the user's `\usepackage{enumitem}` on a BasicTeX install.
+        ops.set_preamble(project, "\\usepackage{a-package-that-does-not-exist}\n")
+        response = client.get("/api/render.pdf")
+        if response.status_code == 501:
+            pytest.skip("no pdflatex on PATH")
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert detail["kind"] == "missing_package"
+        assert "a-package-that-does-not-exist" in detail["message"]
+        assert "tlmgr install" in detail["hint"]
+
+    def test_the_compile_probe_answers_without_returning_a_file(self, client, project):
+        """The browser asks this first so it can show a problem in the sheet the
+        user is looking at, rather than in a new tab."""
+        small(project)
+        ops.set_preamble(project, "\\usepackage{a-package-that-does-not-exist}\n")
+        report = client.get("/api/render/compile").json()
+        if (report.get("problem") or {}).get("kind") == "no_engine":
+            pytest.skip("no pdflatex on PATH")
+        assert report["ok"] is False
+        assert report["problem"]["kind"] == "missing_package"
+
+    def test_a_dangling_ref_compiles_but_is_reported_as_a_warning(self, client, project):
+        small(project)
+        ops.edit_statement(project, "a", "See Section \\ref{nowhere} for the setting.")
+        report = client.get("/api/render/compile").json()
+        if (report.get("problem") or {}).get("kind") == "no_engine":
+            pytest.skip("no pdflatex on PATH")
+        assert report["ok"] is True
+        assert report["undefined_refs"] == ["nowhere"]
+        assert any("??" in w for w in report["warnings"])
+
+    def test_a_failing_compile_does_not_serve_the_previous_pdf(self, client, project):
+        small(project)
+        first = client.get("/api/render.pdf")
+        if first.status_code == 501:
+            pytest.skip("no pdflatex on PATH")
+        assert first.status_code == 200
+        ops.set_preamble(project, "\\usepackage{a-package-that-does-not-exist}\n")
+        assert client.get("/api/render.pdf").status_code == 422

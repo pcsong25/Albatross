@@ -14,8 +14,6 @@ take minutes, so it goes to :mod:`bp.ui.jobs` and the request returns a job id.
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -24,8 +22,9 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .. import checks, events as events_mod, frontier, ops, recompile as recompile_mod
+from .. import checks, compile as compile_mod, events as events_mod, frontier, ops
 from .. import ledger as ledger_mod
+from .. import recompile as recompile_mod
 from .. import render as render_mod
 from .. import verification as verification_mod
 from .. import why as why_mod
@@ -365,36 +364,60 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
 
     @app.get("/api/render.pdf")
     def api_render_pdf(clean: bool = False, audit: bool = False) -> FileResponse:
-        engine = shutil.which("pdflatex")
-        if engine is None:
-            raise HTTPException(
-                status_code=501,
-                detail="no pdflatex on PATH. The LaTeX source is still available "
-                "from the download button.",
-            )
-        tex = render_mod.document(
-            load(), clean=clean, audit=audit, preamble=ops.read_preamble(project)
+        """Compile the document and return the PDF.
+
+        A document that does not compile is **not a server error**. It is a fact
+        about the user's LaTeX, so it comes back as ``422`` with a classified
+        problem the browser can render — a missing package names the package and
+        the command that installs it. Returning ``500`` here read as "the tool is
+        broken" when the actual answer was "run `tlmgr install enumitem`".
+        """
+        result = compile_mod.compile_pdf(
+            render_mod.document(
+                load(), clean=clean, audit=audit, preamble=ops.read_preamble(project)
+            ),
+            project.build_dir,
+            name="document-clean" if clean else "document",
         )
-        build = project.build_dir
-        build.mkdir(parents=True, exist_ok=True)
-        name = "document-clean" if clean else "document"
-        (build / f"{name}.tex").write_text(tex, encoding="utf-8")
-        for _ in range(2):  # twice, so \ref and the hyperlinks resolve
-            result = subprocess.run(
-                [engine, "-interaction=nonstopmode", "-halt-on-error", f"{name}.tex"],
-                cwd=build,
-                capture_output=True,
-                text=True,
-                timeout=180,
-            )
-        pdf = build / f"{name}.pdf"
-        if not pdf.exists():
+        if not result.ok:
+            problem = result.problem
             raise HTTPException(
-                status_code=500,
-                detail="pdflatex did not produce a PDF:\n"
-                + _tex_error(result.stdout or ""),
+                # 501 when this machine simply has no TeX; 422 when the document
+                # itself is at fault. Neither is a bug in the server.
+                status_code=501 if problem and problem.kind == "no_engine" else 422,
+                detail={
+                    **(problem.as_dict() if problem else {}),
+                    "warnings": result.warnings,
+                },
             )
-        return FileResponse(pdf, media_type="application/pdf", filename=pdf.name)
+        assert result.pdf is not None
+        return FileResponse(
+            result.pdf, media_type="application/pdf", filename=result.pdf.name
+        )
+
+    @app.get("/api/render/compile")
+    def api_render_compile(clean: bool = False, audit: bool = False) -> dict[str, Any]:
+        """Compile without returning the file: did it work, and what did it warn?
+
+        The PDF itself has to be fetched by navigation so the browser displays it,
+        and a navigation cannot show an error in the page the user is looking at.
+        So the browser asks this first, shows any problem in place, and only then
+        opens the PDF.
+        """
+        result = compile_mod.compile_pdf(
+            render_mod.document(
+                load(), clean=clean, audit=audit, preamble=ops.read_preamble(project)
+            ),
+            project.build_dir,
+            name="document-clean" if clean else "document",
+        )
+        return {
+            "ok": result.ok,
+            "problem": result.problem.as_dict() if result.problem else None,
+            "warnings": result.warnings,
+            "undefined_refs": result.undefined_refs,
+            "duplicate_labels": result.duplicate_labels,
+        }
 
     # --- mutations -----------------------------------------------------------
 
@@ -804,11 +827,3 @@ def _certificate(graph: Graph) -> dict[str, Any]:
             for s in target.support
         ],
     }
-
-
-def _tex_error(log: str) -> str:
-    lines = log.splitlines()
-    for i, line in enumerate(lines):
-        if line.startswith("!"):
-            return "\n".join(lines[i : i + 8])
-    return "\n".join(lines[-15:])

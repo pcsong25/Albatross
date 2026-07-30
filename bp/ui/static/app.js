@@ -1479,25 +1479,70 @@ async function renderSheet() {
   const pre = el('pre', { class: 'tex' }, 'rendering…');
   body.append(pre);
 
+  // Where a compile problem is reported. It has to appear *here*, in the sheet
+  // the user is looking at: opening the PDF is a navigation, and a navigation
+  // that fails lands in a new tab showing raw JSON, which reads as "the tool is
+  // broken" when the real answer is usually one `tlmgr install` away.
+  const status = el('div', {});
+  body.append(status);
+
   const reload = async () => {
     const query = `?clean=${clean.checked}&audit=${audit.checked}`;
     pre.textContent = 'rendering…';
+    status.textContent = '';
     try { pre.textContent = await api('/api/render' + query); }
     catch (e) { pre.textContent = e.message; }
   };
   clean.onchange = reload; audit.onchange = reload;
+
+  const openPdf = async () => {
+    const query = `?clean=${clean.checked}&audit=${audit.checked}`;
+    status.textContent = '';
+    status.append(el('div', { class: 'spinner-row' }, 'compiling — two pdflatex passes…'));
+    let report;
+    try { report = await api('/api/render/compile' + query); }
+    catch (e) { status.textContent = ''; status.append(compileProblem({ message: e.message })); return; }
+    status.textContent = '';
+    for (const w of report.warnings || []) {
+      status.append(el('div', { class: 'warnbox' }, w));
+    }
+    if (!report.ok) {
+      status.append(compileProblem(report.problem || {}));
+      return;
+    }
+    window.open('/api/render.pdf' + query, '_blank');
+  };
+
   sheet('The document', body, [
     { label: 'Close', onClick: closeSheet },
     {
       label: 'Download .tex',
       onClick: () => { window.location = `/api/render.tex?clean=${clean.checked}&audit=${audit.checked}`; },
     },
-    {
-      label: 'Open PDF', primary: true,
-      onClick: () => { window.open(`/api/render.pdf?clean=${clean.checked}&audit=${audit.checked}`, '_blank'); },
-    },
+    { label: 'Open PDF', primary: true, onClick: openPdf },
   ]);
   await reload();
+}
+
+/** A classified LaTeX failure, shown where the user is looking.
+ *
+ * Everything here goes in as textContent: a pdflatex log is full of backslashes
+ * and braces, and the one place in this file allowed to touch innerHTML takes
+ * KaTeX output and nothing else.
+ */
+function compileProblem(problem) {
+  const box = el('div', { class: 'warnbox' });
+  box.append(el('div', {}, el('b', {}, 'The document did not compile. ')));
+  if (problem.message) box.append(el('div', {}, problem.message));
+  if (problem.hint) box.append(el('div', { class: 'small' }, problem.hint));
+  if (problem.excerpt) {
+    box.append(el('pre', { class: 'tex small' }, problem.excerpt));
+  }
+  box.append(el('div', { class: 'small muted' },
+    'This is a fact about the LaTeX, not a failure of the graph — the source is ' +
+    'still available from Download .tex, and everything else in the interface is ' +
+    'unaffected.'));
+  return box;
 }
 
 async function checkSheet() {
