@@ -68,7 +68,11 @@ _ESCAPES = {
     "^": r"\textasciicircum{}",
 }
 
-_BACKTICK_RE = re.compile(r"`([^`\n]+)`")
+#: A node id in single backticks. The negative look-around is what stops the LaTeX
+#: open-quote idiom ``like this'' being read as a backtick pair — without it,
+#: ``the ``good'' case and the ``bad'' case`` had the phrase between the two
+#: quotations set in typewriter, in a document that compiled.
+_BACKTICK_RE = re.compile(r"(?<!`)`(?!`)([^`\n]+)`(?!`)")
 
 
 _BARE_PERCENT_RE = re.compile(r"(?<!\\)%")
@@ -92,17 +96,32 @@ def prose(text: str) -> str:
     return _BARE_PERCENT_RE.sub(r"\\%", text)
 
 
+#: A fragment that is entirely wrapped in one pair of dollars already.
+_WRAPPED_RE = re.compile(r"^\$(?P<inner>(?:[^$]|\\\$)*)\$$", re.S)
+
+
 def math(tex: str) -> str:
     """Wrap a math-mode fragment in dollars.
 
-    Hypothesis ``tex`` and ``applied_to`` are fragments — ``s > 3/2``, not
-    ``$s > 3/2$``. If the author already supplied dollars, leave them be rather
-    than producing display math by accident.
+    Hypothesis ``tex``, ``applied_to`` and a claim's ``text`` are fragments —
+    ``s > 3/2``, not ``$s > 3/2$``.
+
+    The rule used to be "leave it alone if it contains any ``$``", which was wrong
+    in a way that compiled: a fragment like
+    ``s>3/2 \text{ where $s$ is the regularity}`` has an interior dollar, so it was
+    emitted bare into text mode. It typesets — and ``>`` in text mode is the wrong
+    glyph, so the reader saw ``s¿3/2``. Now a fragment already wrapped end-to-end is
+    unwrapped and re-wrapped, and anything else is wrapped, which is right in both
+    cases.
     """
     tex = prose(tex.strip())
     if not tex:
         return ""
-    return tex if "$" in tex else f"${tex}$"
+    wrapped = _WRAPPED_RE.match(tex)
+    if wrapped:
+        inner = wrapped.group("inner").strip()
+        return f"${inner}$" if inner else ""
+    return f"${tex}$"
 
 
 def _link(node_id: str, known: set[str]) -> str:
@@ -126,7 +145,10 @@ def resolve_refs(text: str, known: set[str]) -> str:
         inner = m.group(1).strip()
         if ID_RE.match(inner):
             return _link(inner, known)
-        return f"\\texttt{{{escape(inner)}}}"
+        # Not an id. Leave it exactly as written: in LaTeX a backtick is an
+        # open-quote, and rewriting it to \texttt was corrupting prose that was
+        # already correct.
+        return m.group(0)
 
     return _BACKTICK_RE.sub(sub, text)
 
@@ -387,14 +409,25 @@ def certificate(graph) -> dict[str, object]:
     }
 
 
+#: ``article`` permits four nested lists and then refuses: the fifth is
+#: "! LaTeX Error: Too deeply nested." and no PDF at all. A blocked chain six
+#: nodes deep is an ordinary thing for a real development to contain, so the
+#: chain flattens rather than the document failing.
+MAX_LIST_NESTING = 3
+
+
 def _why_items(children, known: set[str], depth: int = 0) -> str:
-    """The ``bp why`` chain as a nested itemize.
+    """The ``bp why`` chain, as nested lists down to :data:`MAX_LIST_NESTING`.
 
     Nesting matters: a flat list of reasons loses which node is blocked by
-    which, and that structure is the whole content of the answer.
+    which, and that structure is the whole content of the answer. But it cannot
+    nest without limit — beyond the fourth level LaTeX stops, so deeper levels are
+    rendered as indented lines that keep the shape without opening a list.
     """
     if not children:
         return ""
+    if depth >= MAX_LIST_NESTING:
+        return _why_flat(children, known, depth)
     pad = "  " * depth
     out = [f"{pad}\\begin{{itemize}}\\itemsep2pt"]
     for child in children:
@@ -403,6 +436,21 @@ def _why_items(children, known: set[str], depth: int = 0) -> str:
         if nested:
             out.append(nested)
     out.append(f"{pad}\\end{{itemize}}")
+    return "\n".join(out)
+
+
+def _why_flat(children, known: set[str], depth: int) -> str:
+    """The tail of a deep chain, indented by hand instead of by a list."""
+    out: list[str] = []
+    for child in children:
+        indent = f"\\hspace*{{{min(depth, 8) * 1.2:.1f}em}}"
+        out.append(
+            f"\\par\\noindent{indent}$\\hookrightarrow$~"
+            + resolve_refs(child.sentence, known)
+        )
+        deeper = _why_flat(child.children, known, depth + 1)
+        if deeper:
+            out.append(deeper)
     return "\n".join(out)
 
 

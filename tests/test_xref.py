@@ -357,3 +357,40 @@ class TestIntegration:
         assert codes(families["xref"]) == ["XRF001"]
         # And the parent is not blamed for the child's dangling reference.
         assert checks.for_node(g, g["t"])["xref"] == []
+
+
+class TestAuxStaleness:
+    """A number served from an old build is a wrong number presented confidently,
+    which is worse than no number: adding a display to a node typeset earlier in
+    reading order shifts every later one."""
+
+    def _labelled(self, project):
+        write_node(project, "t", target=True,
+                   statement="\\begin{equation}\\label{eq:main} a=b \\end{equation}",
+                   proof="By \\eqref{eq:main}.")
+        project.build_dir.mkdir(parents=True, exist_ok=True)
+        (project.build_dir / "document.aux").write_text(AUX, encoding="utf-8")
+
+    def test_a_current_aux_is_used(self, project):
+        self._labelled(project)
+        import os, time
+        # Make the aux unambiguously newer than the node file.
+        future = time.time() + 10
+        os.utime(project.build_dir / "document.aux", (future, future))
+        assert xref.resolved_numbers(project) == {"eq:main": "1", "eq:second": "2"}
+
+    def test_an_aux_older_than_a_node_file_is_refused(self, project):
+        self._labelled(project)
+        import os, time
+        past = time.time() - 3600
+        os.utime(project.build_dir / "document.aux", (past, past))
+        assert xref.resolved_numbers(project) == {}
+
+    def test_an_aux_older_than_the_preamble_is_refused(self, project):
+        self._labelled(project)
+        import os, time
+        now = time.time()
+        os.utime(project.build_dir / "document.aux", (now, now))
+        project.preamble_path.write_text("\\newcommand{\\Hs}{H^s}\n", encoding="utf-8")
+        os.utime(project.preamble_path, (now + 10, now + 10))
+        assert xref.resolved_numbers(project) == {}

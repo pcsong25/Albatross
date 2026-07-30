@@ -354,20 +354,40 @@ def numbers_from_aux(aux: str) -> dict[str, str]:
 
 
 def resolved_numbers(project) -> dict[str, str]:
-    """Numbers from the last successful compile, if there was one.
+    """Numbers from the last compile, **only if that compile is still current**.
 
-    Empty is a normal answer, not a failure: nobody has built a PDF yet. Callers
+    Empty is a normal answer, not a failure: nobody has built a PDF yet, and callers
     show the defining node instead, which is the more useful half anyway.
+
+    The staleness test is the point. A ``.aux`` is the artifact of whenever somebody
+    last built a PDF; serving numbers out of it unconditionally means that adding a
+    display equation to a node typeset earlier in reading order silently shifts every
+    later number, and the browser goes on showing the old ones. A wrong number
+    presented confidently is worse than no number, so the ``.aux`` has to be newer
+    than every node file and the preamble.
     """
-    for name in ("document.aux", "document-clean.aux"):
-        path = project.build_dir / name
-        if not path.exists():
-            continue
+    aux = project.build_dir / "document.aux"
+    if not aux.exists():
+        return {}
+    try:
+        built = aux.stat().st_mtime
+    except OSError:
+        return {}
+
+    sources = list(project.nodes_dir.rglob("*.md")) if project.nodes_dir.is_dir() else []
+    if project.preamble_path.exists():
+        sources.append(project.preamble_path)
+    for source in sources:
         try:
-            return numbers_from_aux(path.read_text(encoding="utf-8", errors="replace"))
+            if source.stat().st_mtime > built:
+                return {}
         except OSError:
-            continue
-    return {}
+            return {}
+
+    try:
+        return numbers_from_aux(aux.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return {}
 
 
 def display_map(graph, project, index: Index | None = None) -> dict[str, dict[str, str]]:

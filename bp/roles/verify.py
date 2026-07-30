@@ -810,7 +810,7 @@ def _families_ran(report: VerifyReport) -> list[str]:
     extractor never runs, so the record says ``ledger: not_run`` rather than
     ``pass``, which would be a claim about claims nobody enumerated.
     """
-    families = ["integrity", "children_used", "discharge", "xref"]
+    families = ["integrity", "children_used", "discharge", "xref", "latex"]
     if report.ledger_ran:
         families.append("ledger")
     return families

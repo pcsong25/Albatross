@@ -31,6 +31,7 @@ raw LaTeX that the check does not model.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -43,6 +44,12 @@ _UNDEFINED_CS_RE = re.compile(r"Undefined control sequence.*?\n.*?(\\[A-Za-z@]+)
 _UNDEFINED_ENV_RE = re.compile(r"Environment ([A-Za-z@*]+) undefined")
 _UNDEFINED_REF_RE = re.compile(r"Reference [`'\"]([^'\"]+?)['\"] on page \d+ undefined")
 _MULTIPLY_DEFINED_RE = re.compile(r"Label [`'\"]([^'\"]+?)['\"] multiply defined")
+#: Content that fell off the page. `\output is active` distinguishes "a line is a
+#: bit long" (routine, ignorable) from "a block did not fit and is gone".
+_LOST_CONTENT_RE = re.compile(r"Overfull \\vbox \(([\d.]+)pt too high\)[^\n]*output is active")
+#: LaTeX asking for another pass. Two is normally enough, but a changed label set
+#: can need a third, and stopping early leaves ?? in a document that "succeeded".
+_RERUN_RE = re.compile(r"Rerun to get|Label\(s\) may have changed")
 _ERROR_BLOCK_RE = re.compile(r"^! (.*)$", re.M)
 _LINE_RE = re.compile(r"^l\.(\d+)(.*)$", re.M)
 
@@ -91,6 +98,11 @@ class CompileResult:
     #: Labels defined more than once. One silently wins, so any ``\ref`` to them
     #: may point at the wrong thing.
     duplicate_labels: list[str] = field(default_factory=list)
+    #: Overflow amounts, in points, for blocks that fell off a page. A successful
+    #: compile with one of these is a PDF missing some of the user's mathematics.
+    lost_content: list[str] = field(default_factory=list)
+    #: LaTeX still wanted another pass when we stopped. Means numbers may be wrong.
+    needs_rerun: bool = False
     log: str = ""
 
     @property
@@ -105,6 +117,16 @@ class CompileResult:
             out.append(
                 f"`\\label{{{label}}}` is defined more than once; one silently wins, "
                 "so a reference to it may point at the wrong place"
+            )
+        for amount in self.lost_content:
+            out.append(
+                f"a block overflowed its page by {amount}pt and part of it is not in "
+                "the PDF at all — usually a very long admitted or assumed statement"
+            )
+        if self.needs_rerun:
+            out.append(
+                "LaTeX still wanted another pass, so some numbers or references in "
+                "this PDF may be one build out of date"
             )
         return out
 
@@ -216,6 +238,18 @@ def classify(log: str) -> LatexProblem | None:
             excerpt=_excerpt(log, offset),
         )
 
+    if "Paragraph ended before" in first or "Paragraph ended before" in log:
+        return LatexProblem(
+            kind="paragraph_in_argument",
+            message="A blank line appears in a field that has to be a single "
+            "paragraph.",
+            hint="the status apparatus, a hypothesis fragment, an admission reason, a "
+            "discharge source and an objection are all single-paragraph fields. "
+            "Remove the blank line — or, if the text really needs two paragraphs, it "
+            "probably wants to be a note on the node instead." + where,
+            excerpt=_excerpt(log, offset),
+        )
+
     if "Runaway argument" in log or "File ended while scanning" in log:
         return LatexProblem(
             kind="unbalanced",
@@ -246,6 +280,21 @@ def warnings_in(log: str) -> tuple[list[str], list[str]]:
         if m.group(1) not in labels:
             labels.append(m.group(1))
     return refs, labels
+
+
+def lost_content_in(log: str) -> list[str]:
+    """Blocks that overflowed the page and are therefore not in the PDF.
+
+    A successful compile can still have dropped content: an unbreakable box longer
+    than a page runs off the bottom, and the only trace is an ``Overfull \vbox``
+    while the output routine is active. That is a silent loss of the user's
+    mathematics, so it is reported next to the success.
+    """
+    return sorted({m.group(1) for m in _LOST_CONTENT_RE.finditer(log)})
+
+
+def wants_another_pass(log: str) -> bool:
+    return bool(_RERUN_RE.search(log))
 
 
 def engine() -> str | None:
@@ -293,15 +342,33 @@ def compile_pdf(
     for suffix in (".aux", ".out", ".toc", ".log"):
         (workdir / f"{name}{suffix}").unlink(missing_ok=True)
 
+    # pdflatex wraps its log at 79 columns *mid-token* by default, which silently
+    # breaks every regex below: a document with nine undefined references yielded
+    # four, because the wrap fell inside "on page 1 undefined" and the pattern could
+    # no longer match locally. `max_print_line` is the documented knob.
+    #
+    # `-no-shell-escape` because every statement and proof in this document is at
+    # least partly model-written, and a `\write18` in one of them executes on a
+    # machine configured with `shell_escape=t` — which people who use minted or
+    # gnuplot often are. Behaviour should not depend on local TeX configuration.
+    env = {**os.environ, "max_print_line": "10000", "error_line": "254",
+           "half_error_line": "238"}
     log = ""
     for _ in range(max(1, passes)):
         try:
             result = subprocess.run(
-                [binary, "-interaction=nonstopmode", "-halt-on-error", f"{name}.tex"],
+                [
+                    binary,
+                    "-interaction=nonstopmode",
+                    "-halt-on-error",
+                    "-no-shell-escape",
+                    f"{name}.tex",
+                ],
                 cwd=workdir,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                env=env,
             )
         except subprocess.TimeoutExpired:
             return CompileResult(
@@ -327,6 +394,29 @@ def compile_pdf(
         except OSError:
             pass
 
+    # LaTeX occasionally needs a third pass when the label set has changed. Two is
+    # the normal answer; stopping at two anyway would leave ?? in a "successful" PDF.
+    if pdf.exists() and wants_another_pass(log) and passes >= 2:
+        try:
+            subprocess.run(
+                [
+                    binary,
+                    "-interaction=nonstopmode",
+                    "-halt-on-error",
+                    "-no-shell-escape",
+                    f"{name}.tex",
+                ],
+                cwd=workdir,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=env,
+            )
+            if log_file.exists():
+                log = log_file.read_text(encoding="utf-8", errors="replace")
+        except subprocess.TimeoutExpired:
+            pass
+
     refs, labels = warnings_in(log)
     if not pdf.exists():
         return CompileResult(
@@ -341,11 +431,18 @@ def compile_pdf(
             ),
             undefined_refs=refs,
             duplicate_labels=labels,
+            lost_content=lost_content_in(log),
             log=log,
         )
 
     return CompileResult(
-        ok=True, pdf=pdf, undefined_refs=refs, duplicate_labels=labels, log=log
+        ok=True,
+        pdf=pdf,
+        undefined_refs=refs,
+        duplicate_labels=labels,
+        lost_content=lost_content_in(log),
+        needs_rerun=wants_another_pass(log),
+        log=log,
     )
 
 

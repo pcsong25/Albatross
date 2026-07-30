@@ -69,11 +69,31 @@ def _project(root: Optional[Path] = None):
 
 
 def _graph(root: Optional[Path] = None):
+    """Load the project, or refuse.
+
+    A node file that will not parse is **fatal here**, not a warning. It used to be
+    printed to stderr and then ignored, which is much worse than it sounds: the
+    unparseable node is simply absent from the graph, so its parent has one fewer
+    child, the sweep finds nothing unfinished beneath it, and `bp render` produces a
+    document headed *"top is proved. It rests on no admitted step, no assumption and
+    no unfinished lemma."* — with the missing lemma nowhere in it and exit code 0.
+
+    A document derived from a partial graph is worse than no document. This is the
+    same call the loader already made for a cycle, applied to the other way the
+    graph can be incomplete.
+    """
     project = _project(root)
     graph, diagnostics, swept = checks.load_graph(project)
     fatal = [d for d in diagnostics if d.severity == "error"]
     for d in fatal:
         err_console.print(f"[bold red]error[/] {d.message}")
+    if fatal:
+        err_console.print(
+            f"[bold red]error[/] {len(fatal)} node file(s) could not be read, so the "
+            "graph is incomplete and anything derived from it would be a claim about "
+            "a project you do not have. Fix the file(s) above and try again."
+        )
+        raise typer.Exit(code=1)
     if not swept:
         err_console.print(
             "[bold red]error[/] the children relation has a cycle, so no status "

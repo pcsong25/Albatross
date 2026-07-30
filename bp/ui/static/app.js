@@ -1605,6 +1605,11 @@ async function renderSheet() {
     try { report = await api('/api/render/compile' + query); }
     catch (e) { status.textContent = ''; status.append(compileProblem({ message: e.message })); return; }
     status.textContent = '';
+    // The deterministic view first: it names the node responsible, which a LaTeX
+    // warning never does.
+    for (const d of report.xref_diagnostics || []) {
+      status.append(el('div', { class: 'warnbox' }, `${d.code} on ${d.node}: ${d.message}`));
+    }
     for (const w of report.warnings || []) {
       status.append(el('div', { class: 'warnbox' }, w));
     }
@@ -1612,7 +1617,18 @@ async function renderSheet() {
       status.append(compileProblem(report.problem || {}));
       return;
     }
-    window.open('/api/render.pdf' + query, '_blank');
+    // `built=1`: the artifact this compile just produced, rather than a fresh
+    // compile — so one click is two pdflatex passes, not four, and the warnings
+    // above describe the file that opens.
+    //
+    // A real link rather than window.open after an await: a popup opened from an
+    // async continuation is blocked by default in most browsers.
+    const href = '/api/render.pdf' + query + '&built=1';
+    const link = el('a', {
+      class: 'noderef', href: href, target: '_blank', rel: 'noopener',
+    }, 'Open the PDF ▸');
+    status.append(el('div', {}, link));
+    link.click();
   };
 
   sheet('The document', body, [

@@ -94,9 +94,21 @@ class TestClassify:
 
     def test_an_unbalanced_brace_is_recognised(self):
         problem = compile_mod.classify(
-            "Runaway argument?\n{the statement\n! Paragraph ended before \\bpmark was complete."
+            "Runaway argument?\n{the statement\n! File ended while scanning use of \\bphyp."
         )
         assert problem.kind == "unbalanced"
+
+    def test_a_blank_line_in_a_short_field_is_not_called_an_unbalanced_brace(self):
+        """These produce "Runaway argument?" too, and calling them unbalanced sent
+        the user hunting for a missing brace that was never there. The real cause is
+        a blank line in an objection, a reason or a hypothesis fragment."""
+        problem = compile_mod.classify(
+            "Runaway argument?\n{a verifier raised an objection --- first\n"
+            "! Paragraph ended before \\bpmark was complete.\nl.105 }"
+        )
+        assert problem.kind == "paragraph_in_argument"
+        assert "blank line" in problem.message
+        assert "single-paragraph" in problem.hint
 
     def test_an_unrecognised_error_still_reports_the_first_one(self):
         problem = compile_mod.classify("! Dimension too large.\nl.7 \\hbox")
@@ -229,3 +241,48 @@ class TestNoEngine:
         assert not result.ok
         assert result.problem.kind == "no_engine"
         assert "download button" in result.problem.hint
+
+
+class TestSilentLosses:
+    """A compile can succeed and still have thrown away the user's mathematics."""
+
+    def test_content_that_fell_off_a_page_is_reported(self):
+        log = (
+            "Overfull \\vbox (573.49228pt too high) has occurred while \\output is active\n"
+            "Output written on document.pdf (3 pages).\n"
+        )
+        assert compile_mod.lost_content_in(log) == ["573.49228"]
+
+    def test_an_ordinary_overfull_line_is_not_reported(self):
+        """Overfull \\hbox is routine typesetting noise. Reporting it would bury the
+        one that means content is gone."""
+        log = "Overfull \\hbox (12.3pt too wide) in paragraph at lines 40--41\n"
+        assert compile_mod.lost_content_in(log) == []
+
+    def test_a_request_for_another_pass_is_noticed(self):
+        assert compile_mod.wants_another_pass("LaTeX Warning: Label(s) may have changed.")
+        assert compile_mod.wants_another_pass("Rerun to get cross-references right.")
+        assert not compile_mod.wants_another_pass("Output written on document.pdf")
+
+    def test_both_appear_in_the_warning_list(self):
+        result = compile_mod.CompileResult(
+            ok=True, lost_content=["573.49"], needs_rerun=True
+        )
+        text = " ".join(result.warnings)
+        assert "not in the PDF at all" in text
+        assert "one build out of date" in text
+
+
+@pdflatex
+class TestLogWrapping:
+    def test_a_long_label_survives_the_logs_line_wrapping(self, tmp_path):
+        """pdflatex wraps its log at 79 columns mid-token by default, which broke
+        every pattern here: a document with nine long undefined references reported
+        four. `max_print_line` is the fix."""
+        long_names = [f"eq:a-very-long-label-name-number-{i:02d}-for-wrapping" for i in range(9)]
+        body = "\n".join(f"See \\ref{{{n}}}." for n in long_names)
+        tex = "\\documentclass{article}\n\\begin{document}\n" + body + "\n\\end{document}\n"
+        result = compile_mod.compile_pdf(tex, tmp_path)
+        assert result.ok
+        assert sorted(result.undefined_refs) == sorted(long_names)
+        assert all("\n" not in ref for ref in result.undefined_refs)

@@ -790,3 +790,97 @@ class TestArchiveAndBack:
     def test_nothing_archived_is_an_empty_list_not_an_error(self, client, project):
         small(project)
         assert client.get("/api/archived").json()["nodes"] == []
+
+
+class TestPdfServing:
+    """Three bugs in one endpoint, all reproduced before being fixed."""
+
+    def test_the_pdf_is_served_inline_not_as_a_download(self, client, project):
+        """Starlette defaults content_disposition_type to "attachment" as soon as a
+        filename is given, so Open PDF downloaded the file and left an empty tab."""
+        small(project)
+        r = client.get("/api/render.pdf")
+        if r.status_code == 501:
+            pytest.skip("no pdflatex on PATH")
+        assert r.status_code == 200
+        assert r.headers["content-disposition"].startswith("inline")
+        assert r.content[:5] == b"%PDF-"
+
+    def test_built_serves_the_artifact_the_probe_just_made(self, client, project):
+        """One click on Open PDF used to run pdflatex four times — twice for the
+        probe, twice again for the download — so the warnings shown described a
+        different compile than the file that opened."""
+        small(project)
+        probe = client.get("/api/render/compile").json()
+        if (probe.get("problem") or {}).get("kind") == "no_engine":
+            pytest.skip("no pdflatex on PATH")
+        assert probe["ok"]
+        r = client.get("/api/render.pdf?built=true")
+        assert r.status_code == 200 and r.content[:5] == b"%PDF-"
+
+    def test_the_audit_variant_does_not_share_a_file_with_the_plain_one(self, client, project):
+        """The job name depended only on `clean`, so audit and non-audit fought over
+        one set of build files."""
+        small(project)
+        plain = client.get("/api/render.pdf")
+        if plain.status_code == 501:
+            pytest.skip("no pdflatex on PATH")
+        audited = client.get("/api/render.pdf?audit=true")
+        assert plain.status_code == audited.status_code == 200
+        assert (project.build_dir / "document.pdf").exists()
+        assert (project.build_dir / "document-audit.pdf").exists()
+
+    def test_parallel_requests_never_return_a_truncated_pdf(self, client, project):
+        """Six parallel requests used to give ten 200-but-not-a-PDF responses out of
+        thirty-six, including a zero-byte one: FileResponse streamed a file pdflatex
+        was rewriting underneath it."""
+        import concurrent.futures
+
+        small(project)
+        first = client.get("/api/render.pdf")
+        if first.status_code == 501:
+            pytest.skip("no pdflatex on PATH")
+
+        def hit(i):
+            r = client.get("/api/render.pdf" + ("?audit=true" if i % 2 else ""))
+            return r.status_code, r.content[:5] == b"%PDF-"
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+            results = list(ex.map(hit, range(12)))
+        assert all(status == 200 for status, _ in results)
+        assert all(is_pdf for _, is_pdf in results)
+
+    def test_the_compile_probe_reports_the_deterministic_view_too(self, client, project):
+        """A LaTeX warning never names the node responsible. XRF001 does."""
+        small(project)
+        ops.edit_statement(project, "a", "See Section \\ref{nowhere}.")
+        report = client.get("/api/render/compile").json()
+        codes = [d["code"] for d in report["xref_diagnostics"]]
+        assert "XRF001" in codes
+        assert report["xref_diagnostics"][0]["node"] == "a"
+
+
+class TestLabelsEndpoint:
+    def test_the_label_map_is_served_for_the_browser_to_substitute(self, client, project):
+        small(project)
+        ops.edit_statement(
+            project, "a", "\\begin{equation}\\label{eq:a} x = y \\end{equation}"
+        )
+        data = client.get("/api/labels").json()
+        assert data["labels"]["eq:a"]["node"] == "a"
+        # No compile yet, so no number — the node is the useful half anyway.
+        assert data["labels"]["eq:a"]["number"] == ""
+        assert data["has_numbers"] is False
+
+    def test_a_dangling_reference_comes_back_as_a_diagnostic(self, client, project):
+        small(project)
+        ops.edit_statement(project, "a", "See \\ref{nowhere}.")
+        data = client.get("/api/labels").json()
+        assert [d["code"] for d in data["diagnostics"]] == ["XRF001"]
+
+    def test_the_node_panel_lists_what_it_defines_and_references(self, client, project):
+        small(project)
+        ops.edit_statement(project, "a", "\\label{eq:a} and \\eqref{eq:a}")
+        detail = client.get("/api/node/a").json()
+        assert [x["name"] for x in detail["labels"]] == ["eq:a"]
+        assert [x["name"] for x in detail["refs"]] == ["eq:a"]

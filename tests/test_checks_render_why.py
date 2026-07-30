@@ -319,3 +319,77 @@ def test_the_shipped_fixture_has_both_shapes_of_verification_record(fixture_proj
     for node_id in ("gclm.elb-a", "gclm.blowup"):
         node = g[node_id]
         assert verification_mod.implied_status(node.verification) == node.local_status
+
+
+class TestLatexTextChecks:
+    """TEX001 and TEX002: the two ways authored LaTeX goes wrong in silence."""
+
+    def test_TEX001_a_midline_percent_is_reported(self, project):
+        """It deletes the rest of the line from the PDF, in a document that compiles
+        cleanly. `render.prose` was documented as defusing this for bodies and does
+        not — and it must not, because the prover writes `% GAP:` comments."""
+        write_node(project, "t", target=True,
+                   statement="The bound improves by 5% in the interior, hence $x>0$.")
+        report = checks.run(project)
+        d = [x for x in report.diagnostics if x.code == "TEX001"]
+        assert len(d) == 1
+        assert d[0].severity == "warn"
+        assert "\\%" in (d[0].hint or "")
+
+    def test_a_line_initial_percent_is_a_deliberate_comment(self, project):
+        write_node(project, "t", target=True,
+                   statement="Real text.\n% a comment, and the prover's % GAP: lines\n")
+        assert [d for d in checks.run(project).diagnostics if d.code == "TEX001"] == []
+
+    def test_an_escaped_percent_is_not_reported(self, project):
+        write_node(project, "t", target=True, statement="50\\% of the mass.")
+        assert [d for d in checks.run(project).diagnostics if d.code == "TEX001"] == []
+
+    def test_TEX002_an_odd_number_of_dollars_is_an_error(self, project):
+        write_node(project, "t", target=True, proof="We have $a = b and then we go on.")
+        d = [x for x in checks.run(project).diagnostics if x.code == "TEX002"]
+        assert len(d) == 1
+        assert d[0].severity == "error"
+        assert "proof" in d[0].message
+
+    def test_balanced_dollars_are_clean(self, project):
+        write_node(project, "t", target=True, proof="We have $a = b$ and $c = d$.")
+        assert [d for d in checks.run(project).diagnostics if d.code == "TEX002"] == []
+
+    def test_an_escaped_dollar_does_not_count(self, project):
+        write_node(project, "t", target=True, statement="It costs \\$5 and $x>0$.")
+        assert [d for d in checks.run(project).diagnostics if d.code == "TEX002"] == []
+
+    def test_a_dollar_inside_a_comment_does_not_count(self, project):
+        write_node(project, "t", target=True, statement="$x>0$\n% note about $y$\n")
+        assert [d for d in checks.run(project).diagnostics if d.code == "TEX002"] == []
+
+
+class TestRenderCorruption:
+    def test_a_fragment_with_interior_dollars_is_still_wrapped(self):
+        """The old rule was "leave it alone if it contains any $", which emitted this
+        bare into text mode where `>` is the wrong glyph — the reader saw `s¿3/2`,
+        in a document that compiled."""
+        out = render.math("s>3/2 \\text{ where $s$ is the regularity}")
+        assert out.startswith("$") and out.endswith("$")
+
+    def test_an_already_wrapped_fragment_is_not_double_wrapped(self):
+        assert render.math("$s > 3/2$") == "$s > 3/2$"
+
+    def test_an_empty_fragment_stays_empty(self):
+        assert render.math("") == ""
+        assert render.math("$$") == ""
+
+    def test_latex_open_quotes_survive_reference_resolution(self):
+        """`_BACKTICK_RE` knew nothing about the ``quote'' idiom, so the phrase
+        between two quotations was set in typewriter — in a document that compiled."""
+        text = "the ``good'' case and the ``bad'' case"
+        assert render.resolve_refs(text, set()) == text
+
+    def test_a_backticked_node_id_still_becomes_a_link(self):
+        out = render.resolve_refs("by `a.b` we are done", {"a.b"})
+        assert "\\hyperref[node:a.b]" in out
+
+    def test_a_backticked_non_id_is_left_alone(self):
+        text = "the `not an id, this` case"
+        assert render.resolve_refs(text, set()) == text

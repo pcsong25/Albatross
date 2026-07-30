@@ -1,91 +1,112 @@
 ((= Jinja delimiters are (((...))) and ((*...*)) so that LaTeX braces pass through =))
 \documentclass[11pt]{article}
 
-\usepackage[margin=1.15in]{geometry}
+% ===========================================================================
+% ORDERING IN THIS PREAMBLE IS LOAD-BEARING. Three rules, learned the hard way,
+% because a mathematician pasting their own paper's preamble in used to get an
+% uncompilable document on the first try:
+%
+%   1. Option-free base packages FIRST, so that a user preamble containing
+%      `\DeclareMathOperator` or `\DeclarePairedDelimiter` has amsmath and
+%      mathtools available. A second `\usepackage{amsmath}` in their file is
+%      then harmless: a duplicate load with no options is a no-op.
+%   2. THE USER'S PREAMBLE NEXT, before anything with options and before our
+%      theorem environments — so that their `\usepackage[hidelinks]{hyperref}`
+%      and their `\newtheorem{lemma}{Lemma}` both simply win.
+%   3. Ours afterwards, defensively: `\PassOptionsToPackage` so a package they
+%      already loaded cannot clash, and `\@ifundefined` guards so a theorem
+%      environment they already defined is left alone.
+% ===========================================================================
+
 \usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{amsthm}
 \usepackage{mathtools}
 \usepackage{mathrsfs}
-\usepackage[dvipsnames]{xcolor}
-\usepackage[colorlinks=true,linkcolor=RoyalBlue,citecolor=RoyalBlue,urlcolor=RoyalBlue]{hyperref}
+
+% T1 gives the text-mode glyphs the default encoding gets wrong — without it a
+% stray `>` in prose sets as an inverted question mark, silently.
+\PassOptionsToPackage{T1}{fontenc}
+\usepackage{fontenc}
 
 % Commonly wanted, but not in every TeX installation. Loaded only if present, so
-% a missing one degrades the typesetting instead of breaking the build.
+% a missing one degrades the typesetting instead of breaking the build. Note that
+% an *unguarded* `\usepackage` of a missing package in your own preamble.tex is a
+% hard error — `bp render --pdf` names the package and the command that installs it.
 \IfFileExists{bbm.sty}{\usepackage{bbm}}{}
 \IfFileExists{enumitem.sty}{\usepackage{enumitem}}{}
 \IfFileExists{float.sty}{\usepackage{float}}{}
-
-\theoremstyle{plain}
-\newtheorem{theorem}{Theorem}
-\newtheorem{proposition}[theorem]{Proposition}
-\newtheorem{lemma}[theorem]{Lemma}
-\theoremstyle{definition}
-\newtheorem{definition}[theorem]{Definition}
-\newtheorem{assumption}[theorem]{Assumption}
-
-((* if not clean *))
-% --- status apparatus: present only because parts of this document are not yet
-% --- proved. `bp render --clean` omits all of it.
-\newsavebox{\bpboxreg}
-\newenvironment{bpbox}%
-  {\par\medskip\noindent\begin{lrbox}{\bpboxreg}%
-   \begin{minipage}{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}}%
-  {\end{minipage}\end{lrbox}\noindent\fbox{\usebox{\bpboxreg}}\par\medskip}
-\newcommand{\bpmark}[3]{%
-  \par\noindent{\small\colorbox{#1!15}{\textcolor{#1!65!black}{\textbf{\,#2\,}}}%
-  \hspace{0.5em}\textcolor{#1!55!black}{#3}}\par\nobreak\smallskip}
-\newcommand{\bphyp}[1]{\par\noindent{\small\textit{Hypotheses.} #1}\par\smallskip}
-\newcommand{\bpaudit}[1]{\par\noindent{\footnotesize\textcolor{Gray}{#1}}\par\smallskip}
-((* else *))
-\newsavebox{\bpboxreg}
-\newenvironment{bpbox}%
-  {\par\medskip\noindent\begin{lrbox}{\bpboxreg}%
-   \begin{minipage}{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}}%
-  {\end{minipage}\end{lrbox}\noindent\fbox{\usebox{\bpboxreg}}\par\medskip}
-\newcommand{\bpmark}[3]{}
-\newcommand{\bphyp}[1]{\par\noindent{\small\textit{Hypotheses.} #1}\par\smallskip}
-\newcommand{\bpaudit}[1]{}
-((* endif *))
 
 ((* if preamble *))
 % ---------------------------------------------------------------------------
 % The project's own preamble, from preamble.tex. Passed through verbatim: your
 % macros are yours, and rewriting them would change what your statements mean.
+% It comes before our options and our theorem environments so that yours win.
 % ---------------------------------------------------------------------------
 (((preamble)))
 % --- end of preamble.tex ---------------------------------------------------
 ((* endif *))
 
+% Options go through \PassOptionsToPackage: if preamble.tex already loaded one of
+% these with its own options, ours is a no-op and theirs stands. Loading it here
+% with options directly would be "Option clash for package hyperref" and no PDF.
+\PassOptionsToPackage{margin=1.15in}{geometry}
+\usepackage{geometry}
+\PassOptionsToPackage{dvipsnames}{xcolor}
+\usepackage{xcolor}
+\PassOptionsToPackage{colorlinks=true,linkcolor=RoyalBlue,citecolor=RoyalBlue,urlcolor=RoyalBlue}{hyperref}
+\usepackage{hyperref}
+
+% Only define a theorem environment the document does not already have. A user
+% whose preamble defines `lemma` their own way keeps their numbering.
+\makeatletter
+\theoremstyle{plain}
+\@ifundefined{theorem}{\newtheorem{theorem}{Theorem}}{}
+\@ifundefined{proposition}{\newtheorem{proposition}[theorem]{Proposition}}{}
+\@ifundefined{lemma}{\newtheorem{lemma}[theorem]{Lemma}}{}
+\theoremstyle{definition}
+\@ifundefined{definition}{\newtheorem{definition}[theorem]{Definition}}{}
+\@ifundefined{assumption}{\newtheorem{assumption}[theorem]{Assumption}}{}
+\makeatother
+
+% --- status apparatus ------------------------------------------------------
+% `\long`, every one of them. These take model-written free text — an objection's
+% `why`, an admission reason, a discharge source — and a short \newcommand
+% argument may not contain a blank line: one produces "Paragraph ended before
+% \bpmark was complete" and no PDF at all. A verifier writing two paragraphs is
+% not a rare event.
+\newsavebox{\bpboxreg}
+% A breakable frame, not lrbox+minipage+fbox: that cannot break across a page, so
+% an admitted statement longer than a page ran off the bottom and was lost, with
+% only an "Overfull \vbox" in the log to say so.
+\newenvironment{bpbox}%
+  {\par\medskip\noindent\rule{\linewidth}{0.4pt}\par\nobreak\vspace{2pt}%
+   \begingroup\leftskip=1em\rightskip=1em\noindent\ignorespaces}%
+  {\par\endgroup\vspace{2pt}\nobreak\noindent\rule{\linewidth}{0.4pt}\par\medskip}
+((= `\long\def` is necessary but not sufficient: `\textcolor{...}{#3}` puts the
+    free text into ANOTHER short argument, so `\color` is used as a switch inside a
+    group instead. The label (#2) is a fixed word and stays in \colorbox. =))
+((* if not clean *))
+\long\def\bpmark#1#2#3{%
+  \par\noindent{\small\colorbox{#1!15}{\textcolor{#1!65!black}{\textbf{\,#2\,}}}%
+  \hspace{0.5em}\begingroup\color{#1!55!black}#3\endgroup}\par\nobreak\smallskip}
+\long\def\bphyp#1{\par\noindent{\small\textit{Hypotheses.} #1}\par\smallskip}
+\long\def\bpaudit#1{%
+  \par\noindent{\footnotesize\begingroup\color{Gray}#1\endgroup}\par\smallskip}
+((* else *))
+\long\def\bpmark#1#2#3{}
+\long\def\bphyp#1{\par\noindent{\small\textit{Hypotheses.} #1}\par\smallskip}
+\long\def\bpaudit#1{}
+((* endif *))
+
 \title{(((title)))}
 \date{(((date)))}
 
-\begin{document}
-\maketitle
-
-((* if not clean *))
-\section*{Status}
-
-(((certificate.headline)))
-
-((* if certificate.support_items *))
-\begin{itemize}\itemsep2pt
-((* for item in certificate.support_items *))
-  \item (((item)))
-((* endfor *))
-\end{itemize}
-((* endif *))
-
-((* if certificate.why *))
-(((certificate.why)))
-((* endif *))
-
-\medskip\noindent{\small (((certificate.counts)))}
-
-\bigskip\hrule\bigskip
-((* endif *))
-
-((* for entry in entries *))
+((= One entry. A macro, so the appendix cannot drift from the main body — it
+    already had: the appendix loop ignored `boxed` and `sketch`, which gave an
+    ADMITTED node a proof environment and therefore a QED box, in exactly the place
+    the document must not claim something was proved. =))
+((* macro entry_block(entry) *))
 ((* if entry.mark *))
 \bpmark{(((entry.mark.colour)))}{(((entry.mark.label)))}{(((entry.mark.text)))}
 ((* endif *))
@@ -123,7 +144,35 @@
 ((* elif entry.no_proof_note *))
 \bpmark{(((entry.no_proof_note.colour)))}{(((entry.no_proof_note.label)))}{(((entry.no_proof_note.text)))}
 ((* endif *))
+((* endmacro *))
 
+\begin{document}
+\maketitle
+
+((* if not clean *))
+\section*{Status}
+
+(((certificate.headline)))
+
+((* if certificate.support_items *))
+\begin{itemize}\itemsep2pt
+((* for item in certificate.support_items *))
+  \item (((item)))
+((* endfor *))
+\end{itemize}
+((* endif *))
+
+((* if certificate.why *))
+(((certificate.why)))
+((* endif *))
+
+\medskip\noindent{\small (((certificate.counts)))}
+
+\bigskip\hrule\bigskip
+((* endif *))
+
+((* for entry in entries *))
+(((entry_block(entry))))
 ((* endfor *))
 ((* if appendix *))
 \appendix
@@ -132,25 +181,7 @@
 The following are in the project but nothing on the path to the target uses them.
 
 ((* for entry in appendix *))
-((* if entry.mark *))
-\bpmark{(((entry.mark.colour)))}{(((entry.mark.label)))}{(((entry.mark.text)))}
-((* endif *))
-\begin{(((entry.env)))}[(((entry.caption)))]\label{node:(((entry.id)))}
-((* if entry.hypotheses *))
-\bphyp{(((entry.hypotheses)))}
-((* endif *))
-(((entry.statement)))
-\end{(((entry.env)))}
-((* if entry.scrutiny *))
-\bpaudit{(((entry.scrutiny)))}
-((* endif *))
-((* if entry.proof *))
-
-\begin{proof}
-(((entry.proof)))
-\end{proof}
-((* endif *))
-
+(((entry_block(entry))))
 ((* endfor *))
 ((* endif *))
 \end{document}

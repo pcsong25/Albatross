@@ -14,6 +14,7 @@ take minutes, so it goes to :mod:`bp.ui.jobs` and the request returns a job id.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,11 @@ from ..roles import verify as verify_role
 from . import jobs as jobs_mod
 
 STATIC = Path(__file__).parent / "static"
+
+#: pdflatex writes into a shared build directory, so two compiles at once
+#: interleave and a `FileResponse` can stream a file being rewritten. Module-level
+#: rather than per-app: the build directory belongs to the project on disk.
+_build_lock = threading.Lock()
 
 
 # --- request bodies -----------------------------------------------------------
@@ -384,42 +390,78 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
         tex = render_mod.document(
             load(), clean=clean, audit=audit, preamble=ops.read_preamble(project)
         )
-        path = project.build_dir / ("document-clean.tex" if clean else "document.tex")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(tex, encoding="utf-8")
+        name = "document" + ("-clean" if clean else "") + ("-audit" if audit else "")
+        path = project.build_dir / f"{name}.tex"
+        with _build_lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(tex, encoding="utf-8")
         return FileResponse(path, media_type="application/x-tex", filename=path.name)
 
-    @app.get("/api/render.pdf")
-    def api_render_pdf(clean: bool = False, audit: bool = False) -> FileResponse:
-        """Compile the document and return the PDF.
+    def _build(clean: bool, audit: bool):
+        """Compile one variant, serialised, into its own job name.
 
-        A document that does not compile is **not a server error**. It is a fact
-        about the user's LaTeX, so it comes back as ``422`` with a classified
-        problem the browser can render — a missing package names the package and
-        the command that installs it. Returning ``500`` here read as "the tool is
-        broken" when the actual answer was "run `tlmgr install enumitem`".
+        Two things here were bugs. The job name used to depend only on ``clean``, so
+        the ``audit`` and non-``audit`` variants fought over one set of files. And
+        nothing serialised the run: six parallel requests produced ten responses out
+        of thirty-six that were ``200`` with a body that was not a PDF — including a
+        zero-byte one — because ``FileResponse`` streamed a file pdflatex was
+        rewriting underneath it.
         """
-        result = compile_mod.compile_pdf(
-            render_mod.document(
-                load(), clean=clean, audit=audit, preamble=ops.read_preamble(project)
-            ),
-            project.build_dir,
-            name="document-clean" if clean else "document",
-        )
-        if not result.ok:
-            problem = result.problem
-            raise HTTPException(
-                # 501 when this machine simply has no TeX; 422 when the document
-                # itself is at fault. Neither is a bug in the server.
-                status_code=501 if problem and problem.kind == "no_engine" else 422,
-                detail={
-                    **(problem.as_dict() if problem else {}),
-                    "warnings": result.warnings,
-                },
+        name = "document" + ("-clean" if clean else "") + ("-audit" if audit else "")
+        with _build_lock:
+            return compile_mod.compile_pdf(
+                render_mod.document(
+                    load(), clean=clean, audit=audit, preamble=ops.read_preamble(project)
+                ),
+                project.build_dir,
+                name=name,
             )
+
+    def _compile_error(result) -> HTTPException:
+        problem = result.problem
+        return HTTPException(
+            # 501 when this machine simply has no TeX; 422 when the document itself
+            # is at fault. Neither is a bug in the server.
+            status_code=501 if problem and problem.kind == "no_engine" else 422,
+            detail={
+                **(problem.as_dict() if problem else {}),
+                "warnings": result.warnings,
+            },
+        )
+
+    @app.get("/api/render.pdf")
+    def api_render_pdf(
+        clean: bool = False, audit: bool = False, built: bool = False
+    ) -> FileResponse:
+        """Return the PDF, compiling only if there is not already a current one.
+
+        ``built=1`` says the browser has just called ``/api/render/compile`` and the
+        artifact is ready — so a single click on *Open PDF* runs pdflatex twice, not
+        four times, and the warnings shown in the sheet describe the very file that
+        opens.
+
+        ``content_disposition_type="inline"`` because Starlette defaults to
+        ``attachment`` as soon as a filename is given, which turned *Open PDF* into a
+        download and left an empty tab behind.
+        """
+        name = "document" + ("-clean" if clean else "") + ("-audit" if audit else "")
+        ready = project.build_dir / f"{name}.pdf"
+        if built and ready.exists():
+            return FileResponse(
+                ready,
+                media_type="application/pdf",
+                filename=ready.name,
+                content_disposition_type="inline",
+            )
+        result = _build(clean, audit)
+        if not result.ok:
+            raise _compile_error(result)
         assert result.pdf is not None
         return FileResponse(
-            result.pdf, media_type="application/pdf", filename=result.pdf.name
+            result.pdf,
+            media_type="application/pdf",
+            filename=result.pdf.name,
+            content_disposition_type="inline",
         )
 
     @app.get("/api/render/compile")
@@ -429,21 +471,24 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
         The PDF itself has to be fetched by navigation so the browser displays it,
         and a navigation cannot show an error in the page the user is looking at.
         So the browser asks this first, shows any problem in place, and only then
-        opens the PDF.
+        opens the PDF — with ``built=1``, so this compile is the one it opens.
         """
-        result = compile_mod.compile_pdf(
-            render_mod.document(
-                load(), clean=clean, audit=audit, preamble=ops.read_preamble(project)
-            ),
-            project.build_dir,
-            name="document-clean" if clean else "document",
-        )
+        graph = load()
+        index = xref_mod.build(graph)
+        result = _build(clean, audit)
         return {
             "ok": result.ok,
             "problem": result.problem.as_dict() if result.problem else None,
             "warnings": result.warnings,
             "undefined_refs": result.undefined_refs,
             "duplicate_labels": result.duplicate_labels,
+            # The deterministic view of the same question, which does not need a
+            # compile to answer and names the node responsible.
+            "xref_diagnostics": [
+                d.model_dump()
+                for d in xref_mod.check_xref(graph, index)
+                if d.severity == "error"
+            ],
         }
 
     # --- mutations -----------------------------------------------------------

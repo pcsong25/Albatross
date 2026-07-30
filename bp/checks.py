@@ -10,6 +10,7 @@ Checks never mutate anything. They load, derive in memory, and describe.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from . import discharge as discharge_mod
@@ -18,7 +19,7 @@ from . import xref as xref_mod
 from .diagnostics import Diagnostic, err, sort_diagnostics, warn
 from .graph import Graph, GraphError
 from .load import computed_in_memory, computed_on_disk, load_nodes
-from .model import Node, cites, known_frontmatter_keys
+from .model import PROOF, STATEMENT, Node, cites, known_frontmatter_keys
 from .paths import Project
 from .propagate import sweep
 
@@ -45,6 +46,66 @@ def children_used(node: Node) -> list[Diagnostic]:
                     f"child {cid} is declared but never cited in the proof",
                     hint="cite it in the prose where it is used, or drop it from "
                     "`children` — an unused child is a dependency that is not real",
+                )
+            )
+    return d
+
+
+#: A ``%`` that is not the first thing on its line. LaTeX comments the rest of the
+#: line out, so ``improves by 5% in the interior, hence $x>0$`` loses everything
+#: after the ``5`` — in a document that compiles cleanly.
+_MIDLINE_PERCENT_RE = re.compile(r"^(?P<before>[^\n%]*[^\s%])(?<!\\)%", re.M)
+
+#: Unescaped ``$``. ``\$`` is a literal dollar and ``$$`` opens display maths, so
+#: both are removed before counting.
+_ESCAPED_DOLLAR_RE = re.compile(r"\\\$")
+_COMMENT_LINE_RE = re.compile(r"(?<!\\)%.*$", re.M)
+
+
+def latex_text(node: Node) -> list[Diagnostic]:
+    """``TEX001``–``TEX002``: the two ways authored LaTeX goes wrong in silence.
+
+    Everything a user or an agent writes here is LaTeX, and the renderer passes it
+    through — which is right, because escaping it would destroy it. The cost is that
+    a mistake in it is not caught until ``pdflatex`` runs, and one of these two is
+    not caught even then.
+    """
+    d: list[Diagnostic] = []
+    for section in (STATEMENT, PROOF):
+        text = node.section(section)
+        if not text.strip():
+            continue
+        where = section.lower()
+
+        for m in _MIDLINE_PERCENT_RE.finditer(text):
+            fragment = m.group("before").strip()[-48:]
+            d.append(
+                warn(
+                    "TEX001",
+                    node,
+                    f"a mid-line `%` in the {where} comments out the rest of that "
+                    f"line: …{fragment}%",
+                    hint="LaTeX drops everything after it, and the document still "
+                    "compiles — so the text simply disappears from the PDF. Write "
+                    "`\\%` for a percent sign. A `%` at the start of a line is a "
+                    "deliberate comment and is not reported.",
+                )
+            )
+
+        # Count dollars outside comments: a `%` really does comment out a `$`.
+        live = _COMMENT_LINE_RE.sub("", text)
+        dollars = _ESCAPED_DOLLAR_RE.sub("", live).count("$")
+        if dollars % 2:
+            d.append(
+                err(
+                    "TEX002",
+                    node,
+                    f"the {where} has an odd number of `$` ({dollars}), so a maths "
+                    "delimiter is unclosed",
+                    hint="the document will not compile, and in the browser the "
+                    "scanner pairs the stray `$` with the next one and typesets the "
+                    "prose between them as mathematics. Write `\\$` for a literal "
+                    "dollar sign.",
                 )
             )
     return d
@@ -162,7 +223,7 @@ def load_graph(project: Project) -> tuple[Graph, list[Diagnostic], bool]:
 #: The deterministic check families, in the order the verification record lists
 #: them. Names are part of the record's schema, so they are here rather than
 #: spelled out in :mod:`bp.verification`.
-FAMILIES = ("integrity", "children_used", "discharge", "ledger", "xref")
+FAMILIES = ("integrity", "children_used", "discharge", "ledger", "xref", "latex")
 
 
 def for_node(graph: Graph, node: Node) -> dict[str, list[Diagnostic]]:
@@ -184,6 +245,7 @@ def for_node(graph: Graph, node: Node) -> dict[str, list[Diagnostic]]:
         "discharge": discharge_mod.check_discharge(node, graph),
         "ledger": ledger_mod.check_ledger(node),
         "xref": xref,
+        "latex": latex_text(node),
     }
 
 
@@ -195,6 +257,7 @@ def run(project: Project) -> Report:
 
     for node in graph.active.values():
         diagnostics.extend(schema_hygiene(node))
+        diagnostics.extend(latex_text(node))
         diagnostics.extend(children_used(node))
         diagnostics.extend(discharge_mod.check_discharge(node, graph))
         diagnostics.extend(ledger_mod.check_ledger(node))
