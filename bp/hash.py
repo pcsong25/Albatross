@@ -68,13 +68,48 @@ def content_hash(payload: dict[str, Any]) -> str:
     return hashlib.sha256(blob.encode()).hexdigest()[:RECORD_HASH_LENGTH]
 
 
+#: Prefix for a dependency created by a LaTeX cross-reference rather than by the
+#: ``children`` relation. Namespaced so that an older certificate, written before
+#: cross-references were tracked, still reads correctly.
+XREF_PREFIX = "xref:"
+
+
+def xref_dependencies(node: Node, graph) -> dict[str, str]:
+    """Nodes whose *statements* this node's text points at with ``\ref``/``\eqref``.
+
+    A cross-reference is a dependency, and it is not one the ``children`` relation
+    records. That matters for exactly one reason, and it is a silent one: without
+    this, a child whose statement says ``\eqref{eq:riccati}`` — with the equation
+    defined in another node — keeps its verification when that equation is edited.
+    The certificate would hold ``self`` and the child hashes, the referenced node
+    would not be in it, and the node would stay green while the text it leans on
+    moved underneath it.
+
+    That is **under**-invalidation, which :mod:`bp.hash` exists to avoid: this
+    module deliberately over-invalidates everywhere else because the opposite error
+    lets a certificate outlive the claim it certified.
+    """
+    from . import xref as xref_mod
+
+    index = xref_mod.index_for(graph)
+    out: dict[str, str] = {}
+    for source, target in sorted(index.edges()):
+        if source != node.id:
+            continue
+        other = graph.get(target)
+        if other is not None:
+            out[XREF_PREFIX + target] = other.statement_hash or statement_hash(other)
+    return out
+
+
 def is_stale(node: Node, graph) -> bool:
     """True when the node's verification certificate no longer matches reality.
 
     ``verified_against`` records, at the moment verification succeeded, this
-    node's own statement hash under the key ``self`` plus each child's hash under
-    its id. If any of those moved, the verification was about a different claim
-    than the one now written down.
+    node's own statement hash under the key ``self``, each child's hash under its
+    id, and each cross-referenced node's hash under ``xref:<id>``. If any of those
+    moved, the verification was about a different claim than the one now written
+    down.
 
     A node that has never been verified is not stale — it is merely unverified,
     which the sweep reports differently and which reads very differently to a
@@ -93,14 +128,31 @@ def is_stale(node: Node, graph) -> bool:
             return True
         if va.get(c) != child.statement_hash:
             return True
+    for key, recorded in va.items():
+        if not key.startswith(XREF_PREFIX):
+            continue
+        other = graph.get(key[len(XREF_PREFIX) :])
+        if other is None:
+            # The node this reference pointed at is gone, so the reference is now
+            # dangling (XRF001) and the certificate is about a document that no
+            # longer exists.
+            return True
+        if recorded != other.statement_hash:
+            return True
     return False
 
 
 def certificate(node: Node, graph) -> dict[str, str]:
-    """The ``verified_against`` map to write when a verification succeeds."""
+    """The ``verified_against`` map to write when a verification succeeds.
+
+    Three kinds of key: ``self``, one per child, and one ``xref:<id>`` per node this
+    one's text cross-references. The third exists because a reference is a
+    dependency too — see :func:`xref_dependencies`.
+    """
     out = {"self": node.statement_hash or statement_hash(node)}
     for c in node.children:
         child = graph.get(c)
         if child is not None:
             out[c] = child.statement_hash or statement_hash(child)
+    out.update(xref_dependencies(node, graph))
     return out

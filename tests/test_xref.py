@@ -394,3 +394,84 @@ class TestAuxStaleness:
         project.preamble_path.write_text("\\newcommand{\\Hs}{H^s}\n", encoding="utf-8")
         os.utime(project.preamble_path, (now + 10, now + 10))
         assert xref.resolved_numbers(project) == {}
+
+
+class TestStalenessThroughReferences:
+    """A cross-reference is a dependency, and staleness has to know about it.
+
+    Without this, a child whose statement says `\\eqref{eq:riccati}` — with the
+    equation in another node — keeps its verification when that equation is edited:
+    `verified_against` holds `self` and the child hashes, the referenced node is not
+    in it, and the node stays green while the text it leans on moves underneath.
+
+    That is *under*-invalidation, which bp/hash.py exists to avoid; it deliberately
+    over-invalidates everywhere else because the opposite error lets a certificate
+    outlive the claim it certified.
+    """
+
+    def _referencing_pair(self, project):
+        from bp import ops
+
+        write_node(
+            project, "t", target=True, children=["c"], proof="By `c`.",
+            statement="\\begin{equation}\\label{eq:riccati} z' \\ge \\kappa z^2 \\end{equation}",
+            uses={"c": {"applied_to": "x", "discharges": {}}},
+        )
+        write_node(
+            project, "c",
+            statement="With \\eqref{eq:riccati} in mind, this holds.",
+            proof="An argument.",
+        )
+        ops.record_verification(project, "c", "verified")
+
+    def test_the_certificate_records_the_referenced_node(self, project):
+        from bp.hash import XREF_PREFIX
+
+        self._referencing_pair(project)
+        g, _, _ = load_graph(project)
+        assert f"{XREF_PREFIX}t" in g["c"].verified_against
+        assert not g["c"].stale
+
+    def test_editing_the_referenced_statement_makes_the_referrer_stale(self, project):
+        from bp import ops
+
+        self._referencing_pair(project)
+        ops.edit_statement(
+            project, "t",
+            "\\begin{equation}\\label{eq:riccati} z' \\ge 2\\kappa z^2 \\end{equation}",
+        )
+        g, _, _ = load_graph(project)
+        assert g["c"].stale
+        assert g["c"].global_status == "blocked:stale"
+
+    def test_why_names_the_cross_reference_rather_than_only_saying_stale(self, project):
+        from bp import ops, why
+
+        self._referencing_pair(project)
+        ops.edit_statement(project, "t", "\\begin{equation}\\label{eq:riccati} q=r \\end{equation}")
+        g, _, _ = load_graph(project)
+        text = why.text(g, "c")
+        assert "cross-references" in text
+        assert "`t`" in text
+
+    def test_a_node_with_no_references_gets_no_extra_keys(self, project):
+        from bp import ops
+
+        write_node(project, "t", target=True, statement="Plain.", proof="An argument.")
+        ops.record_verification(project, "t", "verified")
+        g, _, _ = load_graph(project)
+        assert set(g["t"].verified_against) == {"self"}
+
+    def test_an_older_certificate_without_xref_keys_still_reads_correctly(self, project):
+        """The prefix is namespaced so a certificate written before this existed is
+        not misread as stale."""
+        write_node(
+            project, "t", target=True, local_status="verified",
+            statement="S.", proof="p", verified_against={"self": "placeholder"},
+        )
+        g, _, _ = load_graph(project)
+        node = g["t"]
+        node.verified_against["self"] = node.statement_hash
+        from bp.hash import is_stale
+
+        assert not is_stale(node, g)

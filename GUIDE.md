@@ -1,7 +1,14 @@
 # GUIDE.md — using Albatross
 
-For the mathematician using this on a real problem. `ARCHITECTURE.md` says how it
-works inside; this says how to work with it.
+For the mathematician using this on a real problem. This is the manual.
+
+- **[UI.md](UI.md)** — the interface reference: every button, label, colour, status
+  and diagnostic code. Reach for it when you want to know what something *is*.
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — how it works inside. Its §0 is what the
+  system guarantees and what it does not, and it is worth reading once before you
+  trust anything here.
+- **[README.md](README.md)** — the short version, for someone deciding whether to
+  try it.
 
 ---
 
@@ -47,24 +54,35 @@ cannot drift into a plausible fiction of your own proof.
 ## 2. Install
 
 ```bash
-cd /path/to/Albatross
+git clone <repo> albatross && cd albatross
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
-.venv/bin/python -m pytest -q          # 266 passed
+.venv/bin/python -m pytest -q          # no network, no key needed
 ```
 
-That gives you a `bp` command inside the virtualenv. Either use
-`.venv/bin/bp`, or activate the environment (`source .venv/bin/activate`) and
-just type `bp`. This guide writes `bp`.
+`bp` is then on the venv's path. Activate the venv, or use `.venv/bin/bp`.
 
-Optional but recommended:
+**LaTeX.** Optional, but without it you get the `.tex` source and no PDF. A
+*minimal* install is not enough for real documents — BasicTeX and
+`texlive-latex-base` both lack `enumitem` and much else, and that is a hard failure
+rather than a degradation:
+
+| Platform | Enough | Comfortable |
+|---|---|---|
+| macOS | BasicTeX + `sudo tlmgr install enumitem cleveref` | MacTeX |
+| Debian/Ubuntu | `texlive-latex-recommended` | `texlive-latex-extra texlive-science` |
+
+Albatross names the missing package and the command that installs it whenever one
+is missing, so you can also just start and fix it when it complains. §6a has the
+detail.
+
+**Models.** Nothing needs a key until you use an agent command; the whole
+deterministic core runs offline. Then:
 
 ```bash
-bp ui --vendor --no-open    # download Cytoscape and KaTeX so the UI works offline
+export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY, or a Claude/Codex CLI login
+bp agents                      # who plays what, and what can actually run here
 ```
-
-You also need at least one model backend. `bp agents` tells you what will run
-here — see §9.
 
 ---
 
@@ -269,6 +287,9 @@ blocks in your terminal and prints what happened.
 
 ## 6. The detail panel, button by button
 
+*Every control in the interface, exhaustively, is in [UI.md](UI.md). This is the
+short tour.*
+
 | Button | What it does | When |
 |---|---|---|
 | **Expand** | Decompose one level. Hint box prefilled with `strategy`. | A node with no children that you cannot prove directly |
@@ -292,25 +313,23 @@ The chevron on a node in the graph (`▾`/`▸`, at its left edge) folds the sub
 
 ---
 
-## 6a. Your own LaTeX
+## 6a. LaTeX: your macros, your packages, and what breaks
 
-**Standard LaTeX works.** `$…$`, `$$…$$`, `\[…\]`, `\(…\)`, and bare display
-environments — `align`, `equation`, `gather`, `multline`, `alignat`, `flalign`,
-starred or not — all typeset in the browser. The rendered document loads
-`amsmath`, `amssymb`, `amsthm`, `mathtools` and `mathrsfs` always, and `bbm`,
-`enumitem` and `float` when your TeX installation has them.
+This is the chapter to read before you paste in your paper's preamble.
 
-**Your macros go in `preamble.tex`**, at the project root — the **Preamble**
-button in the action bar edits it, or `bp preamble --from myfile.tex`. It is
-used in three places, which is the point:
+### Your macros go in `preamble.tex`
+
+At the project root. The **Preamble** button edits it, or `bp preamble --from
+myfile.tex`. It is used in **three** places, which is the whole point:
 
 - injected verbatim into the rendered document;
-- shown to **every agent** as context, so a statement written in your notation is
-  read correctly rather than guessed at;
+- shown to **every agent** as context, so a statement in your notation is read
+  rather than guessed at — a model shown `\ip{u}{v} \in \Hs` and no definitions
+  will invent a meaning and answer confidently about it;
 - parsed by the browser into KaTeX macros, so it typesets on screen.
 
-`\newcommand`, `\renewcommand`, `\providecommand`, `\DeclareMathOperator`
-(with or without `*`) and `\def` are all understood, including arguments:
+`\newcommand`, `\renewcommand`, `\providecommand`, `\DeclareMathOperator` (with or
+without `*`) and `\def` are all understood, including arguments:
 
 ```latex
 \newcommand{\RR}{\mathbb{R}}
@@ -318,15 +337,131 @@ used in three places, which is the point:
 \DeclareMathOperator{\supp}{supp}
 ```
 
-One limitation: KaTeX has no equivalent of an optional-argument default, so
-`\newcommand{\f}[2][x]{…}` loses the default. Everything else carries over.
+**Your preamble wins.** It is injected *before* the renderer's own options and
+theorem environments, so if you define `lemma` your own way, or load `hyperref`
+with `hidelinks`, or set your own `geometry` margins, yours is what the document
+uses. (This was not always true, and a pasted-in preamble used to fail on the
+first try with "Command \lemma already defined".)
+
+**What the renderer loads for you**, so you do not have to: `amsmath`, `amssymb`,
+`amsthm`, `mathtools`, `mathrsfs`, `fontenc`, `geometry`, `xcolor`, `hyperref`
+always, and `bbm`, `enumitem`, `float` when your installation has them. Loading
+any of these again yourself is harmless.
+
+### Missing packages, which is the commonest first failure
+
+Your `\usepackage{enumitem}` is **not** guarded. If the package is not installed
+the document does not compile at all, with
+
+```
+! LaTeX Error: File `enumitem.sty' not found.
+```
+
+A minimal TeX install — BasicTeX, `texlive-latex-base` — is missing a lot:
+`enumitem`, `cleveref`, `mdframed`, `tikz`, `braket`, and more. Two ways out:
+
+```bash
+sudo tlmgr install enumitem cleveref        # macOS / TeX Live
+sudo apt install texlive-latex-extra        # Debian / Ubuntu
+```
+
+or, if you would rather not install anything, guard it and accept worse
+typesetting:
+
+```latex
+\IfFileExists{enumitem.sty}{\usepackage{enumitem}}{}
+```
+
+**Open PDF names the package and the command.** You do not have to read a log. The
+same diagnosis is on the terminal from `bp render --pdf`, which is the better place
+to debug from.
+
+### Cross-references between nodes
+
+**They work.** Every node is rendered into one document and `pdflatex` runs twice,
+so a `\label` written in one node resolves from another and the numbers are the
+document's own:
+
+```latex
+% in the parent's statement
+\begin{equation}\label{eq:riccati}
+  z'(t) \ \ge \ \kappa\, z(t)^2
+\end{equation}
+
+% in another node
+By \eqref{eq:riccati} the growth is superlinear.
+```
+
+What Albatross adds is that the two ways a reference goes **silently** wrong are
+hard errors instead of LaTeX warnings nobody reads:
+
+| Code | | |
+|---|---|---|
+| `XRF001` | **error** | A reference to a label nothing defines. LaTeX only warns and prints `??` in the PDF. This is what catches an agent writing `Section \ref{sec-space}` for a section that does not exist. |
+| `XRF002` | **error** | The same label defined in two nodes. LaTeX lets one win *silently*, so a reference can resolve to the wrong equation with nothing said. |
+| `XRF003` | warn | A reference to a node not in scope — see below. |
+| `XRF004` | warn | A reference into another node's **proof**. A proof is private: what a citer may rely on is a statement, and the verifier is only ever handed statements. Rewriting that proof silently breaks this reference. |
+| `XRF005` | warn | A label nothing references. Usually a leftover, sometimes a reference you meant to write. |
+
+`bp labels` lists every label, everything that references it, and everything
+referenced that does not exist.
+
+**Labels are global to the whole document.** Two nodes that both write
+`\label{eq:main}` collide, so prefix them: `\label{gclm.blowup:main}`.
+
+**In the browser** you see the resolved number as a clickable chip — click it to
+jump to the node that defines it — because KaTeX cannot do `\ref` at all. The
+number comes from LaTeX's own `.aux`, so **build the PDF once** and the numbers
+appear; before that, and whenever a node file is newer than the last build, you see
+the label name instead. Showing a number that might be one build out of date would
+be worse than showing none.
+
+### Can a child reference its parent's equation?
+
+Yes, and it will warn (`XRF003`). It works — the number is right — and it costs you
+two things worth knowing:
+
+1. **The document reads dependencies-first**, so a child prints *before* its
+   parent. A child referencing the parent's equation points forward, to something
+   the reader has not met yet.
+2. **The verifier reads that child with its own children as assumptions and no
+   parent context at all.** It will not know what the reference means, and a model
+   that does not know invents something.
+
+The fix that removes both, and the one to reach for when you find yourself writing
+"in the setting of Section …": **put the shared thing in its own node and cite it
+from both.** A `definition` node holding the function space, the equation, or the
+standing notation, listed in the `children` of everyone who needs it. Then the
+graph records the dependency, the verifier is handed it automatically, and it prints
+before everything that uses it.
+
+That is what `Section \ref{sec-space}` in a child's hypotheses actually wanted to
+be.
+
+### Things that break, and what they look like
+
+The renderer passes your LaTeX through — it does not escape it, because escaping
+would destroy it. The cost is that a mistake is yours to fix. These are the ones
+worth recognising:
+
+| Symptom | Cause |
+|---|---|
+| Text missing from the PDF, which compiled fine | A mid-line `%`. LaTeX comments out the rest of the line. Write `\%`. **`bp check` reports this as `TEX001`.** |
+| "Missing $ inserted" | Maths outside maths mode. Most often a `proof:` or `literature:` discharge source containing bare maths — those are **free text**, so maths inside them needs its own `$…$`. A hypothesis `tex` and an `applied_to` are the opposite: fragments, which the renderer wraps for you. |
+| "Paragraph ended before … was complete" | A blank line in a field that has to be one paragraph: an objection, an admission reason, a hypothesis fragment, a discharge source. |
+| Prose typeset as italic mathematics in the browser | An unclosed `$`. **`bp check` reports this as `TEX002`.** |
+| "Command \lemma already defined" | You are on an old build; update. Your preamble is now injected first and yours wins. |
+| A page of an admitted statement missing | It overflowed its frame. Reported as a warning next to the successful compile. |
+| `\begin{enumerate}` shown as raw source in the browser | KaTeX only typesets *maths*. Lists, `\newenvironment`s and `\\` line breaks appear as source on screen and typeset correctly in the PDF. Use **Open PDF** to see them properly. |
+
+### The proof-reader
 
 **Saving a statement or proof runs a proof-reader first.** It may fix syntax — an
-unbalanced brace, `\end{aligned}` closing a `\begin{align}`, an obsolete `\bf`
-— and it is forbidden from touching the mathematics. You see the rewrite beside
-your original with a one-line reason for each change, and nothing is saved until
-you pick one. If it ever changes a symbol, an index or the direction of an
-inequality, that is a bug: tell me.
+unbalanced brace, `\end{aligned}` closing a `\begin{align}`, an obsolete `\bf` —
+and it is forbidden from touching the mathematics. You see the rewrite beside your
+original with a one-line reason for each change, and nothing is saved until you
+pick. If it ever changes a symbol, an index or the direction of an inequality, that
+is a bug worth reporting.
 
 If the proof-reader cannot run, the save goes through as you typed it. It never
 blocks you.
@@ -635,11 +770,13 @@ Deterministic — no key, no network, no configuration:
 | `bp why [id]` | the status chain, in English |
 | `bp check [--format json]` | every check. Exit 1 on error |
 | `bp obligations [id] [--kind discharge\|claim\|all]` | the worklists as JSON: one record per discharge, one per sourced claim |
-| `bp render [--clean] [--audit] [-o F]` | the LaTeX document |
+| `bp render [--clean] [--audit] [--pdf] [-o F]` | the LaTeX document; `--pdf` compiles it and explains any failure |
+| `bp labels` | every `\label`, everything referencing it, and everything referenced that does not exist |
 | `bp events` / `bp jobs` / `bp calls` | history |
 | `bp sweep` | re-derive and persist the computed fields |
 | `bp admit <id> -r "…"` / `bp assume <id> -r "…"` | with a required reason |
-| `bp note <id> "…"` / `bp relabel <id> <difficulty>` / `bp archive <id>` | |
+| `bp note <id> "…"` / `bp relabel <id> <difficulty>` | |
+| `bp archive <id>` / `bp unarchive <id>` | never deletes; `lifecycle` changes |
 
 Agents — these call models and cost time or money:
 
@@ -690,7 +827,13 @@ Be clear-eyed about the gaps. Each is a known deferral with a row in
   Annoying, but it errs in the safe direction.
 - **Two `bp` processes at once are unguarded.** Running the UI and a CLI command
   simultaneously can have one overwrite the other's obligation cache. Within one
-  process everything is ordered. Use one at a time.
+  process everything is ordered — including PDF builds, which are serialised. Use
+  one at a time.
+- **Whether your LaTeX is valid**, beyond the two silent cases `TEX001` and
+  `TEX002` catch. An unclosed `\begin{align}` or `\textbf{` is found by
+  `pdflatex`, not by `bp check` — so **Open PDF** is part of checking your work,
+  not just of reading it.
+- **Whether the claim ledger is complete** — see §8a.
 
 ---
 

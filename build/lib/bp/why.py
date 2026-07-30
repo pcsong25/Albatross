@@ -54,6 +54,27 @@ def _stale_reason(node: Node, graph) -> str:
             f"`{node.id}` was verified against an earlier version of {names}, whose "
             "statement has changed since"
         )
+
+    # A cross-reference is a dependency too, so it is also something that can move
+    # underneath a verification. Naming it matters: "it is stale" leaves the user
+    # hunting, and the cause here is not a child but a `\ref` into another node.
+    from .hash import XREF_PREFIX
+
+    referenced = [
+        key[len(XREF_PREFIX) :]
+        for key, recorded in va.items()
+        if key.startswith(XREF_PREFIX)
+        and (
+            graph.get(key[len(XREF_PREFIX) :]) is None
+            or recorded != graph[key[len(XREF_PREFIX) :]].statement_hash
+        )
+    ]
+    if referenced:
+        names = ", ".join(f"`{m}`" for m in sorted(referenced))
+        return (
+            f"`{node.id}` cross-references {names} with `\\ref` or `\\eqref`, and that "
+            "statement has changed since it was verified"
+        )
     return f"`{node.id}` is stale"
 
 

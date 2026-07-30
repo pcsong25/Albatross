@@ -165,6 +165,24 @@ def build(graph) -> Index:
     return index
 
 
+def index_for(graph) -> Index:
+    """:func:`build`, memoised on the graph object.
+
+    The propagation sweep asks about staleness once per node, so building the index
+    per call would make the sweep quadratic in the number of nodes. A ``Graph`` is
+    rebuilt from the files on every load, so caching on it is caching for exactly as
+    long as the answer is valid.
+    """
+    cached = getattr(graph, "_xref_index", None)
+    if cached is None:
+        cached = build(graph)
+        try:
+            graph._xref_index = cached
+        except AttributeError:  # pragma: no cover - a graph that forbids attributes
+            pass
+    return cached
+
+
 # --- the checks ---------------------------------------------------------------
 
 
