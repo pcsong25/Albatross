@@ -1,0 +1,122 @@
+# bp.yaml — which model plays which role.
+#
+# `bp init` copies this into a new project. Edit it freely: the system never names
+# a model in its code, only a role, so changing one is a one-line edit here.
+#
+# `bp agents` prints this table and says which backends can actually run on this
+# machine. Start there.
+#
+# ---------------------------------------------------------------------------
+# Backends
+# ---------------------------------------------------------------------------
+#   claude_api   metered Anthropic API   ANTHROPIC_API_KEY        reports cost
+#   openai_api   metered OpenAI API      OPENAI_API_KEY           reports cost
+#   claude_cli   `claude -p`             a Claude subscription    no price
+#   codex_cli    `codex exec`            a Codex subscription     no price
+#   scripted     canned replies          tests only
+#
+# A subscription CLI costs no money per call but is much slower than an API —
+# minutes rather than seconds on a decomposition prompt — and it reports no price,
+# so the *call cap* below becomes the only thing limiting a run.
+#
+# ---------------------------------------------------------------------------
+# The tiering below is deliberate, and it is where your bill is decided
+# ---------------------------------------------------------------------------
+# `extractor` does translation (list what this proof claims), so it takes the
+# cheapest model you have. `obligation` answers the narrow one-question-at-a-time
+# checks and is most of the calls at `--level deep`, so it is the single biggest
+# lever on cost. The four roles that need a whole argument in view — verifier_a,
+# verifier_b, confirmer, auditor — want the strongest model you have.
+#
+# Do not economise on `confirmer`. Without the confirmation pass the objection
+# list is mostly pedantry, you stop reading it, and the one real finding goes with
+# the rest.
+#
+# ⚠️  PUT THE TWO VERIFIERS ON DIFFERENT MODEL FAMILIES. That is the entire reason
+# there are two of them: two models trained by the same lab miss the same things.
+# The default below has both on Anthropic, which is the weakest useful setting —
+# if you have an OPENAI_API_KEY, change verifier_b to:
+#     verifier_b: {backend: openai_api, model: gpt-5.6, timeout: 1800}
+
+agents:
+  roles:
+    # Proposes decompositions. The most demanding role in the system: children, a
+    # reduction proof, and a complete discharge table in one shot. Runs least
+    # often, so it gets the best model.
+    decomposer:
+      backend: claude_api
+      model: claude-opus-5
+      timeout: 900
+
+    # Reads a decomposition back: does the reduction establish the parent, and is
+    # any child secretly the parent again. Two separate calls.
+    checker:
+      backend: claude_api
+      model: claude-opus-5
+      timeout: 900
+
+    # Lists every load-bearing claim a proof makes with the source the prose
+    # offers. Translation, not judgement — hence the cheap model.
+    extractor:
+      backend: claude_api
+      model: claude-haiku-4-5
+      timeout: 600
+
+    # The narrow entailment checks: does this source give this hypothesis, and
+    # does this source justify this claim. Most of the calls at `--level deep`.
+    obligation:
+      backend: claude_api
+      model: claude-sonnet-5
+      timeout: 900
+
+    # The verifier panel: the whole-proof pass. See the warning above — these
+    # should not be the same model family.
+    verifier_a:
+      backend: claude_api
+      model: claude-opus-5
+      timeout: 1800
+    verifier_b:
+      backend: claude_api
+      model: claude-opus-5
+      timeout: 1800
+
+    # Re-reads every objection with its surrounding context and drops the ones
+    # that dissolve. Not optional at any level.
+    confirmer:
+      backend: claude_api
+      model: claude-opus-5
+      timeout: 900
+
+    # Four questions about a statement, no proof in view: well-posedness, a
+    # vacuity witness, quantifier order, and whether a constant depends on
+    # something it is treated as uniform in. Runs at `--level deep` only.
+    auditor:
+      backend: claude_api
+      model: claude-opus-5
+      timeout: 900
+
+    # Writes proofs for routine and standard leaves only. Never sets a status.
+    prover:
+      backend: claude_api
+      model: claude-sonnet-5
+      timeout: 900
+
+budget:
+  # A run stops before the call that would cross either cap.
+  #
+  # The dollar cap only constrains calls whose price is known. A subscription CLI
+  # reports no price, so with CLI backends the CALL CAP is the only thing limiting
+  # a run — keep it set.
+  #
+  # `bp recompile --dry-run --level deep` prints the bill before you pay it, and
+  # `--level` is the knob that actually controls cost.
+  per_recompile_usd: 3.0
+  max_calls_per_recompile: 40
+
+# Published list prices, US dollars per million tokens, used for the --dry-run
+# estimate and the dollar cap. The defaults in bp/agents/registry.py cover the
+# current Claude models; add an entry here for anything else, or to override one.
+#
+# pricing:
+#   gpt-5.6: {input_usd_per_mtok: 1.25, output_usd_per_mtok: 10.0}
+pricing: {}

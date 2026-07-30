@@ -1545,6 +1545,56 @@ function compileProblem(problem) {
   return box;
 }
 
+/** The archive: nodes that are still on disk but out of the active graph.
+ *
+ * They are excluded from the graph view on purpose — they are not part of the
+ * argument any more — but excluding them everywhere left "nothing is destroyed"
+ * as a promise about the filesystem and nothing else. This is the way back.
+ */
+async function archiveSheet() {
+  const body = el('div', {});
+  body.append(el('p', { class: 'small muted' },
+    'Archived nodes keep their file, their text and their history; they are only ' +
+    'out of the active graph. Bringing one back does NOT restore the citations ' +
+    'archiving removed from its parents — re-citing is a decision, and History ' +
+    'records which ones were stripped.'));
+  let data;
+  try { data = await api('/api/archived'); }
+  catch (e) { body.append(el('div', { class: 'warnbox' }, e.message)); data = { nodes: [] }; }
+
+  if (!data.nodes.length) {
+    body.append(el('p', {}, 'Nothing is archived.'));
+  }
+  for (const n of data.nodes) {
+    const row = el('div', { class: 'flag' });
+    const head = el('div', {});
+    head.append(el('span', { class: 'hid' }, n.id));
+    head.append(el('span', { class: 'pill' }, n.role));
+    head.append(el('span', { class: 'pill' }, n.local_status));
+    if (n.children.length) {
+      head.append(el('span', { class: 'muted small' }, ` ${n.children.length} child(ren)`));
+    }
+    row.append(head);
+    const headline = el('div', { class: 'small muted' });
+    headline.append(mathProse(n.headline || '(no statement)'));
+    row.append(headline);
+    row.append(el('button', {
+      onclick: async () => {
+        try {
+          const r = await post(`/api/node/${encodeURIComponent(n.id)}/unarchive`);
+          closeSheet();
+          toast(r.orphan
+            ? `${n.id} is back, but nothing cites it yet — add it to a parent's children.`
+            : `${n.id} is back in the graph.`);
+          await refresh();
+        } catch (e) { toast(e.message, true); }
+      },
+    }, 'Bring back'));
+    body.append(row);
+  }
+  sheet('Archive', body, [{ label: 'Close', onClick: closeSheet }]);
+}
+
 async function checkSheet() {
   const data = await api('/api/check');
   const body = el('div', {});
@@ -1661,6 +1711,7 @@ async function boot() {
   document.getElementById('btn-recompile').onclick = guard(() => recompileSheet());
   document.getElementById('btn-render').onclick = guard(renderSheet);
   document.getElementById('btn-check').onclick = guard(checkSheet);
+  document.getElementById('btn-archive').onclick = guard(archiveSheet);
   document.getElementById('btn-history').onclick = guard(historySheet);
   document.getElementById('btn-agents').onclick = guard(agentsSheet);
   document.getElementById('btn-preamble').onclick = guard(preambleSheet);

@@ -32,7 +32,19 @@ build-backend = "setuptools.build_meta"
 include = ["bp*"]
 
 [tool.setuptools.package-data]
-bp = ["templates/*.j2"]
+# Everything here is loaded at runtime by path, so a wheel that omits any of it
+# installs a broken program. The first version shipped only the Jinja template,
+# which meant an installed copy had no web interface (`bp ui` served nothing) and
+# no prompts (every role died with "missing prompt file"). There is a test that
+# builds a wheel and checks these are present.
+bp = [
+    "templates/*.j2",
+    "templates/*.yaml",
+    "roles/prompts/*.md",
+    "ui/static/*",
+    "ui/static/vendor/*",
+    "ui/static/vendor/fonts/*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

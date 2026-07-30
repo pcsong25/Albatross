@@ -1,0 +1,156 @@
+((= Jinja delimiters are (((...))) and ((*...*)) so that LaTeX braces pass through =))
+\documentclass[11pt]{article}
+
+\usepackage[margin=1.15in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{mathtools}
+\usepackage{mathrsfs}
+\usepackage[dvipsnames]{xcolor}
+\usepackage[colorlinks=true,linkcolor=RoyalBlue,citecolor=RoyalBlue,urlcolor=RoyalBlue]{hyperref}
+
+% Commonly wanted, but not in every TeX installation. Loaded only if present, so
+% a missing one degrades the typesetting instead of breaking the build.
+\IfFileExists{bbm.sty}{\usepackage{bbm}}{}
+\IfFileExists{enumitem.sty}{\usepackage{enumitem}}{}
+\IfFileExists{float.sty}{\usepackage{float}}{}
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}[theorem]{Assumption}
+
+((* if not clean *))
+% --- status apparatus: present only because parts of this document are not yet
+% --- proved. `bp render --clean` omits all of it.
+\newsavebox{\bpboxreg}
+\newenvironment{bpbox}%
+  {\par\medskip\noindent\begin{lrbox}{\bpboxreg}%
+   \begin{minipage}{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}}%
+  {\end{minipage}\end{lrbox}\noindent\fbox{\usebox{\bpboxreg}}\par\medskip}
+\newcommand{\bpmark}[3]{%
+  \par\noindent{\small\colorbox{#1!15}{\textcolor{#1!65!black}{\textbf{\,#2\,}}}%
+  \hspace{0.5em}\textcolor{#1!55!black}{#3}}\par\nobreak\smallskip}
+\newcommand{\bphyp}[1]{\par\noindent{\small\textit{Hypotheses.} #1}\par\smallskip}
+\newcommand{\bpaudit}[1]{\par\noindent{\footnotesize\textcolor{Gray}{#1}}\par\smallskip}
+((* else *))
+\newsavebox{\bpboxreg}
+\newenvironment{bpbox}%
+  {\par\medskip\noindent\begin{lrbox}{\bpboxreg}%
+   \begin{minipage}{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}}%
+  {\end{minipage}\end{lrbox}\noindent\fbox{\usebox{\bpboxreg}}\par\medskip}
+\newcommand{\bpmark}[3]{}
+\newcommand{\bphyp}[1]{\par\noindent{\small\textit{Hypotheses.} #1}\par\smallskip}
+\newcommand{\bpaudit}[1]{}
+((* endif *))
+
+((* if preamble *))
+% ---------------------------------------------------------------------------
+% The project's own preamble, from preamble.tex. Passed through verbatim: your
+% macros are yours, and rewriting them would change what your statements mean.
+% ---------------------------------------------------------------------------
+(((preamble)))
+% --- end of preamble.tex ---------------------------------------------------
+((* endif *))
+
+\title{(((title)))}
+\date{(((date)))}
+
+\begin{document}
+\maketitle
+
+((* if not clean *))
+\section*{Status}
+
+(((certificate.headline)))
+
+((* if certificate.support_items *))
+\begin{itemize}\itemsep2pt
+((* for item in certificate.support_items *))
+  \item (((item)))
+((* endfor *))
+\end{itemize}
+((* endif *))
+
+((* if certificate.why *))
+(((certificate.why)))
+((* endif *))
+
+\medskip\noindent{\small (((certificate.counts)))}
+
+\bigskip\hrule\bigskip
+((* endif *))
+
+((* for entry in entries *))
+((* if entry.mark *))
+\bpmark{(((entry.mark.colour)))}{(((entry.mark.label)))}{(((entry.mark.text)))}
+((* endif *))
+((* if entry.boxed *))
+\begin{bpbox}
+((* endif *))
+\begin{(((entry.env)))}[(((entry.caption)))]\label{node:(((entry.id)))}
+((* if entry.hypotheses *))
+\bphyp{(((entry.hypotheses)))}
+((* endif *))
+(((entry.statement)))
+\end{(((entry.env)))}
+((* if entry.boxed *))
+\end{bpbox}
+((* endif *))
+((* if entry.scrutiny *))
+\bpaudit{(((entry.scrutiny)))}
+((* endif *))
+((* if entry.audit *))
+\bpaudit{(((entry.audit)))}
+((* endif *))
+((* if entry.ledger *))
+\bpaudit{(((entry.ledger)))}
+((* endif *))
+((* if entry.proof and entry.sketch *))
+
+\par\noindent\textit{Sketch --- this is not a proof.}
+(((entry.proof)))
+\par\medskip
+((* elif entry.proof *))
+
+\begin{proof}
+(((entry.proof)))
+\end{proof}
+((* elif entry.no_proof_note *))
+\bpmark{(((entry.no_proof_note.colour)))}{(((entry.no_proof_note.label)))}{(((entry.no_proof_note.text)))}
+((* endif *))
+
+((* endfor *))
+((* if appendix *))
+\appendix
+\section{Nodes not cited by the target}
+
+The following are in the project but nothing on the path to the target uses them.
+
+((* for entry in appendix *))
+((* if entry.mark *))
+\bpmark{(((entry.mark.colour)))}{(((entry.mark.label)))}{(((entry.mark.text)))}
+((* endif *))
+\begin{(((entry.env)))}[(((entry.caption)))]\label{node:(((entry.id)))}
+((* if entry.hypotheses *))
+\bphyp{(((entry.hypotheses)))}
+((* endif *))
+(((entry.statement)))
+\end{(((entry.env)))}
+((* if entry.scrutiny *))
+\bpaudit{(((entry.scrutiny)))}
+((* endif *))
+((* if entry.proof *))
+
+\begin{proof}
+(((entry.proof)))
+\end{proof}
+((* endif *))
+
+((* endfor *))
+((* endif *))
+\end{document}

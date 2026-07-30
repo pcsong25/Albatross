@@ -465,6 +465,49 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
         result = mutate(ops.archive, project, node_id, body.cascade)
         return {"ok": True, "archived": result.event["payload"].get("nodes", [])}
 
+    @app.post("/api/node/{node_id}/unarchive")
+    def api_unarchive(node_id: str) -> dict[str, Any]:
+        """Bring an archived node back.
+
+        "Nothing is destroyed" needs a way back, or it is only a promise about the
+        filesystem. Archiving stripped this node's citations from its parents to
+        keep the graph consistent; those are not restored, because re-citing is a
+        decision. The event log says which ones were removed.
+        """
+        refuse_if_busy(node_id)
+        mutate(ops.unarchive, project, node_id)
+        graph = load()
+        node = graph.get(node_id)
+        return {
+            "ok": True,
+            "orphan": bool(node is not None and not graph.parents(node_id) and not node.target),
+        }
+
+    @app.get("/api/archived")
+    def api_archived() -> dict[str, Any]:
+        """Archived nodes, so the browser can offer a way back to them.
+
+        They are excluded from `/api/graph` on purpose — they are not part of the
+        argument — but excluding them everywhere made them unreachable except by
+        hand-editing a file.
+        """
+        graph, _, _ = checks.load_graph(project)
+        return {
+            "nodes": [
+                {
+                    "id": n.id,
+                    "role": n.role,
+                    "difficulty": n.difficulty,
+                    "local_status": n.local_status,
+                    "headline": " ".join(n.statement_section.split())[:140],
+                    "has_proof": n.has_proof,
+                    "children": list(n.children),
+                }
+                for n in sorted(graph.nodes.values(), key=lambda n: n.id)
+                if n.lifecycle != "active"
+            ]
+        }
+
     @app.post("/api/node/{node_id}/child")
     def api_add_child(node_id: str, body: ChildBody) -> dict[str, Any]:
         refuse_if_busy(node_id)

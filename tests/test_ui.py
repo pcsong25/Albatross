@@ -753,3 +753,40 @@ class TestRenderErrors:
         assert first.status_code == 200
         ops.set_preamble(project, "\\usepackage{a-package-that-does-not-exist}\n")
         assert client.get("/api/render.pdf").status_code == 422
+
+
+class TestArchiveAndBack:
+    """"Nothing is destroyed" needs a way back, or it is a promise about the
+    filesystem and nothing more. `ops.unarchive` existed from L0 but was reachable
+    from neither the CLI nor the browser, so archiving was one-way in practice.
+    """
+
+    def test_archived_nodes_are_listed_separately_from_the_graph(self, client, project):
+        small(project)
+        client.post("/api/node/b/archive", json={"cascade": True})
+        graph_ids = {n["id"] for n in client.get("/api/graph").json()["nodes"]}
+        assert "b" not in graph_ids          # not part of the argument any more
+        archived = client.get("/api/archived").json()["nodes"]
+        assert [n["id"] for n in archived] == ["b"]
+        assert archived[0]["headline"]        # its text is still there
+
+    def test_bringing_one_back_puts_it_in_the_active_graph(self, client, project):
+        small(project)
+        client.post("/api/node/b/archive", json={"cascade": True})
+        response = client.post("/api/node/b/unarchive")
+        assert response.status_code == 200
+        assert "b" in {n["id"] for n in client.get("/api/graph").json()["nodes"]}
+        assert graph_of(project)["b"].lifecycle == "active"
+
+    def test_it_says_when_the_node_comes_back_uncited(self, client, project):
+        """Archiving strips the citation from the parent to keep the graph
+        consistent. Restoring does not put it back, because re-citing is a
+        decision — so the response says so rather than leaving an orphan silently."""
+        small(project)
+        client.post("/api/node/b/archive", json={"cascade": True})
+        assert client.post("/api/node/b/unarchive").json()["orphan"] is True
+        assert "b" not in graph_of(project)["t"].children
+
+    def test_nothing_archived_is_an_empty_list_not_an_error(self, client, project):
+        small(project)
+        assert client.get("/api/archived").json()["nodes"] == []

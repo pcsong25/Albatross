@@ -457,11 +457,21 @@ def init(
         err_console.print(f"[bold red]error[/] {exc}")
         raise typer.Exit(code=1)
 
+    # The shipped default lives *inside* the package. It used to be read from
+    # `Path(__file__).parent.parent / "bp.yaml"`, which is the repo root in a
+    # source checkout and `site-packages/` in an installed one — so `bp init`
+    # silently produced a project with no config for anyone who pip-installed.
     config = root / "bp.yaml"
     if not config.exists():
-        shipped = Path(__file__).parent.parent / "bp.yaml"
+        shipped = Path(__file__).parent / "templates" / "bp.yaml"
         if shipped.exists():
             config.write_text(shipped.read_text(encoding="utf-8"), encoding="utf-8")
+        else:  # pragma: no cover - only if package data is missing
+            err_console.print(
+                "[yellow]warning[/] no bp.yaml was written: the installed package "
+                "is missing its default config. `bp agents` will fall back to "
+                "built-in defaults."
+            )
 
     console.print(f"created {nodes_dir / (node_id + '.md')}")
     console.print()
@@ -603,6 +613,31 @@ def archive(
 ) -> None:
     """Archive a node. Never deletes: the file stays, `lifecycle` changes."""
     _run_op(ops.archive, _project(root), node_id, not keep_descendants)
+
+
+@app.command()
+def unarchive(
+    node_id: str,
+    root: Optional[Path] = typer.Option(None, "--root"),
+) -> None:
+    """Bring an archived node back into the active graph.
+
+    "Nothing is destroyed" is only worth something if there is a way back.
+    Archiving strips the node's citations from its parents so the graph stays
+    consistent, and those are *not* restored here — the event log records which
+    ones were removed (`bp events`), and re-citing is a decision rather than a
+    mechanical undo. So expect to add it to a parent's `children` again.
+    """
+    project = _project(root)
+    _run_op(ops.unarchive, project, node_id)
+    graph, _, _ = checks.load_graph(project)
+    node = graph.get(node_id)
+    if node is not None and not graph.parents(node_id) and not node.target:
+        console.print(
+            "[yellow]note[/] nothing cites it yet, so it is an orphan (`REF005`). "
+            "Add it back to a parent's children — `bp events` shows which "
+            "citations archiving removed."
+        )
 
 
 # --- L1 and L2 commands -------------------------------------------------------
