@@ -53,6 +53,37 @@ _RERUN_RE = re.compile(r"Rerun to get|Label\(s\) may have changed")
 _ERROR_BLOCK_RE = re.compile(r"^! (.*)$", re.M)
 _LINE_RE = re.compile(r"^l\.(\d+)(.*)$", re.M)
 
+#: Macro definitions in a user's `preamble.tex`, so an "undefined control sequence"
+#: can say whether the macro is *absent from their own preamble* — which is almost
+#: always the answer — and offer the near-misses.
+_DEFINITION_RE = re.compile(
+    r"\\(?:def|newcommand|renewcommand|providecommand|DeclareMathOperator\*?|let)\s*"
+    r"\{?(\\[A-Za-z@]+)"
+)
+
+
+def defined_macros(preamble: str) -> set[str]:
+    return {m.group(1) for m in _DEFINITION_RE.finditer(preamble)}
+
+
+def _near_misses(name: str, known: set[str], limit: int = 6) -> list[str]:
+    """Defined macros that look like the undefined one.
+
+    Not fuzzy string distance — a shared prefix. The real case was `\cV` in a project
+    defining `\cX`, `\cY`, `\cA`…: the user has a naming scheme and has missed one
+    member of it, and showing the siblings makes that obvious at a glance.
+    """
+    stem = name.rstrip("0123456789")
+    candidates = [
+        k
+        for k in known
+        if k != name
+        and len(k) > 1
+        and (k.startswith(stem[: max(2, len(stem) - 1)]) or stem.startswith(k[:2]))
+    ]
+    return sorted(candidates)[:limit]
+
+
 #: Packages a small TeX installation (BasicTeX, `texlive-latex-base`) does not
 #: ship, mapped to the collection that provides them. This is here so the message
 #: can name the *one* command that fixes it rather than leaving the user to search.
@@ -145,7 +176,7 @@ def _offset_of(log: str, needle: str) -> int:
     return 0
 
 
-def classify(log: str) -> LatexProblem | None:
+def classify(log: str, preamble: str = "") -> LatexProblem | None:
     """Turn a pdflatex log into one actionable problem, or None if it looks fine.
 
     Order matters: the most specific and most fixable causes are tested first, so
@@ -186,6 +217,19 @@ def classify(log: str) -> LatexProblem | None:
             excerpt=_excerpt(log, _offset_of(log, missing.group(0))),
         )
 
+    if "font expansion" in log and "scalable" in log:
+        return LatexProblem(
+            kind="font_expansion",
+            message="`microtype` cannot expand the fonts this document is using, and "
+            "pdfTeX treats that as fatal.",
+            hint="it happens when a T1-encoded Computer Modern is present as *bitmap* "
+            "fonts, which a minimal TeX installation ships. Either install scalable T1 "
+            "faces — `tlmgr install lm cm-super` — or drop `\\usepackage{microtype}` "
+            "from your preamble.tex; it only affects typographic polish. Albatross "
+            "itself only enables T1 when `lmodern` is present, precisely to avoid this.",
+            excerpt=_excerpt(log, _offset_of(log, "font expansion")),
+        )
+
     env = _UNDEFINED_ENV_RE.search(log)
     if env:
         return LatexProblem(
@@ -216,13 +260,32 @@ def classify(log: str) -> LatexProblem | None:
     if first.startswith("Undefined control sequence"):
         cs = _UNDEFINED_CS_RE.search(log)
         name = cs.group(1) if cs else "a command"
+        known = defined_macros(preamble or "")
+        hint = ""
+        if preamble and name != "a command" and name not in known:
+            hint = (
+                f"`{name}` is **not defined in your preamble.tex**, which defines "
+                f"{len(known)} macro(s)."
+            )
+            near = _near_misses(name, known)
+            if near:
+                hint += " You do define " + ", ".join(f"`{n}`" for n in near) + "."
+            hint += (
+                f"\n\nEither add `\\newcommand{{{name}}}{{…}}` to preamble.tex, or "
+                "correct the node that uses it. Note that the browser shows an "
+                "undefined macro as red literal text rather than refusing — easy to "
+                "read past."
+            )
+        else:
+            hint = (
+                "if it is your own macro, define it in preamble.tex — that file is "
+                "injected into the document, shown to every agent, and parsed by the "
+                "browser. If it comes from a package, add the `\\usepackage` there too."
+            )
         return LatexProblem(
             kind="undefined_command",
             message=f"`{name}` is not defined.",
-            hint="if it is your own macro, define it in preamble.tex — that file is "
-            "injected into the document, shown to every agent, and parsed by the "
-            "browser. If it comes from a package, add the `\\usepackage` there too."
-            + where,
+            hint=hint + where,
             excerpt=_excerpt(log, offset),
         )
 
@@ -308,6 +371,7 @@ def compile_pdf(
     *,
     passes: int = 2,
     timeout: float = 180.0,
+    preamble: str = "",
 ) -> CompileResult:
     """Write ``tex`` into ``workdir`` and compile it. Never serves a stale PDF.
 
@@ -421,7 +485,7 @@ def compile_pdf(
     if not pdf.exists():
         return CompileResult(
             ok=False,
-            problem=classify(log)
+            problem=classify(log, preamble)
             or LatexProblem(
                 kind="no_pdf",
                 message="pdflatex reported no error but produced no PDF.",
@@ -448,6 +512,7 @@ def compile_pdf(
 
 __all__ = [
     "CompileResult",
+    "defined_macros",
     "LatexProblem",
     "classify",
     "compile_pdf",

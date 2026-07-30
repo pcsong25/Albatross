@@ -286,3 +286,105 @@ class TestLogWrapping:
         assert result.ok
         assert sorted(result.undefined_refs) == sorted(long_names)
         assert all("\n" not in ref for ref in result.undefined_refs)
+
+
+class TestPreambleAwareDiagnosis:
+    """An "undefined control sequence" is almost always a macro missing from the
+    user's own preamble.tex. Saying so — and showing the ones they *did* define — is
+    the difference between a diagnosis and a restatement of the error.
+
+    The real case: `\\cV` in a project defining `\\cA`, `\\cB`, `\\cD`, `\\cE`, `\\cH`,
+    `\\cJ`, `\\cK`, `\\cL`, `\\cN`, `\\cR`, `\\cT`, `\\cX`, `\\cY`. One member of an
+    obvious naming scheme, missed.
+    """
+
+    PREAMBLE = "\n".join(
+        [r"\newcommand{\cX}{\mathcal X}", r"\newcommand{\cY}{\mathcal Y}",
+         r"\newcommand{\cA}{\mathcal A}", r"\DeclareMathOperator{\spec}{spec}",
+         r"\def\ip#1#2{\langle #1,#2\rangle}"]
+    )
+
+    def test_the_defined_macros_are_collected_from_every_form(self):
+        found = compile_mod.defined_macros(self.PREAMBLE)
+        assert {"\\cX", "\\cY", "\\cA", "\\spec", "\\ip"} <= found
+
+    def test_it_says_the_macro_is_missing_from_your_preamble(self):
+        problem = compile_mod.classify(UNDEFINED_CS_LOG.replace("\\ip", "\\cV"),
+                                      self.PREAMBLE)
+        assert problem.kind == "undefined_command"
+        assert "not defined in your preamble.tex" in problem.hint
+        assert "5 macro(s)" in problem.hint
+
+    def test_it_shows_the_siblings_you_did_define(self):
+        """The naming scheme is the clue: seeing \\cX and \\cY beside \\cV makes the
+        omission obvious at a glance."""
+        problem = compile_mod.classify(UNDEFINED_CS_LOG.replace("\\ip", "\\cV"),
+                                      self.PREAMBLE)
+        assert "`\\cX`" in problem.hint and "`\\cY`" in problem.hint
+
+    def test_it_warns_that_the_browser_hides_this(self):
+        """KaTeX draws an undefined macro as red literal text rather than refusing, so
+        it is easy to read past — which is how this reached a compile."""
+        problem = compile_mod.classify(UNDEFINED_CS_LOG.replace("\\ip", "\\cV"),
+                                      self.PREAMBLE)
+        assert "red literal text" in problem.hint
+
+    def test_a_macro_that_IS_defined_gets_the_generic_hint(self):
+        """Then the cause is elsewhere — a package, or an ordering problem — and
+        blaming their preamble would send them the wrong way."""
+        problem = compile_mod.classify(UNDEFINED_CS_LOG.replace("\\ip", "\\cX"),
+                                       self.PREAMBLE)
+        assert "not defined in your preamble" not in problem.hint
+
+    def test_with_no_preamble_it_falls_back_to_the_generic_hint(self):
+        problem = compile_mod.classify(UNDEFINED_CS_LOG)
+        assert "define it in preamble.tex" in problem.hint
+
+
+FONT_EXPANSION_LOG = r"""
+{/usr/local/texlive/2026basic/texmf-var/fonts/map/pdftex/updmap/pdftex.map}
+! pdfTeX error (font expansion): auto expansion is only possible with scalable fonts.
+<argument> ...shipout/lastpage
+l.186 \]
+!  ==> Fatal error occurred, no output PDF file produced!
+"""
+
+
+class TestFontExpansion:
+    def test_it_names_microtype_and_both_ways_out(self):
+        """The failure a `fontenc[T1]` default caused on a real project whose preamble
+        loads microtype: a minimal TeX ships T1 Computer Modern as *bitmaps*, and
+        microtype cannot expand a bitmap font. Fatal, and completely opaque."""
+        problem = compile_mod.classify(FONT_EXPANSION_LOG)
+        assert problem.kind == "font_expansion"
+        assert "microtype" in problem.message
+        assert "tlmgr install lm cm-super" in problem.hint
+        assert "drop `\\usepackage{microtype}`" in problem.hint
+
+    def test_it_wins_over_the_generic_fallback(self):
+        problem = compile_mod.classify(FONT_EXPANSION_LOG)
+        assert problem.kind != "latex_error"
+
+
+@pdflatex
+class TestT1IsOnlyEnabledWhenSafe:
+    def test_the_template_guards_T1_behind_lmodern(self):
+        """T1 without scalable T1 faces plus microtype is a fatal error, so the
+        template only switches encoding when lmodern is there to supply them."""
+        from bp import render
+
+        text = render.default_preamble()
+        assert "\\IfFileExists{lmodern.sty}" in text
+        i = text.index("\\IfFileExists{lmodern.sty}")
+        # The fontenc load must be inside that guard, not after it.
+        assert "fontenc" in text[i : i + 400]
+
+    def test_a_document_with_microtype_compiles(self, tmp_path):
+        from bp import render
+        from bp.graph import Graph
+
+        tex = render.document(
+            Graph([]), preamble="\\usepackage{microtype}\n", today="2026-01-01"
+        )
+        result = compile_mod.compile_pdf(tex, tmp_path)
+        assert result.ok, result.problem.message if result.problem else "?"

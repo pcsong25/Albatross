@@ -474,7 +474,14 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
         name = "document" + ("-clean" if clean else "") + ("-audit" if audit else "")
         tex = _render(clean, audit)
         with _build_lock:
-            return compile_mod.compile_pdf(tex, project.build_dir, name=name)
+            return compile_mod.compile_pdf(
+                tex,
+                project.build_dir,
+                name=name,
+                # So an "undefined control sequence" can say whether the macro is
+                # missing from *their* preamble, and show the ones they did define.
+                preamble=ops.read_preamble(project),
+            )
 
     def _compile_error(result) -> HTTPException:
         problem = result.problem

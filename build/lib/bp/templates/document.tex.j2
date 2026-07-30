@@ -26,8 +26,19 @@
 
 % T1 gives the text-mode glyphs the default encoding gets wrong — without it a
 % stray `>` in prose sets as an inverted question mark, silently.
-\PassOptionsToPackage{T1}{fontenc}
-\usepackage{fontenc}
+%
+% But ONLY alongside a scalable T1 font family. A minimal TeX installation ships the
+% T1 Computer Modern faces (`ec`) as *bitmaps*, and `microtype` cannot expand a bitmap
+% font: the result is "pdfTeX error (font expansion): auto expansion is only possible
+% with scalable fonts" and no PDF. Loading T1 unconditionally broke a real project
+% whose preamble had `\usepackage{microtype}`. `lmodern` supplies scalable T1 faces,
+% so T1 goes on when it is present and stays off when it is not — OT1's Computer
+% Modern is scalable, so the fallback typesets, just with the older glyph set.
+\IfFileExists{lmodern.sty}{%
+  \usepackage{lmodern}%
+  \PassOptionsToPackage{T1}{fontenc}%
+  \usepackage{fontenc}%
+}{}
 
 % Commonly wanted, but not in every TeX installation. Loaded only if present, so
 % a missing one degrades the typesetting instead of breaking the build. Note that

@@ -440,7 +440,7 @@ def render(
     from . import compile as compile_mod
 
     result = compile_mod.compile_pdf(
-        tex, path.parent, name=path.stem
+        tex, path.parent, name=path.stem, preamble=ops.read_preamble(project)
     )
     for warning in result.warnings:
         console.print(Text(f"warning: {warning}", style="yellow"))
