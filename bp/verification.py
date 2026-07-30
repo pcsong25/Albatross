@@ -14,6 +14,7 @@ the status from that:
                  ∧ no unsourced ledger claims
                  ∧ no flagged obligations
                  ∧ no flagged claims
+                 ∧ no flagged citations
                  ∧ no confirmed objections
                  ∧ at least one whole-proof verifier answered
 
@@ -89,6 +90,8 @@ def implied_status(record: VerificationRecord) -> str:
         return "flagged"
     if record.flagged_obligations or record.flagged_claims:
         return "flagged"
+    if record.flagged_references:
+        return "flagged"
     if record.confirmed_objections:
         return "flagged"
     if not any(
@@ -120,6 +123,12 @@ def reasons(record: VerificationRecord) -> list[str]:
     if record.flagged_claims:
         n = record.flagged_claims
         out.append(f"{n} ledger claim{'s' if n != 1 else ''} flagged")
+    if record.flagged_references:
+        n = record.flagged_references
+        out.append(
+            f"{n} citation{'s' if n != 1 else ''} flagged — the cited text does not "
+            "give what the citing passage uses it for"
+        )
     if record.confirmed_objections:
         n = record.confirmed_objections
         out.append(f"{n} objection{'s' if n != 1 else ''} upheld on confirmation")
@@ -140,6 +149,7 @@ def build(
     families_ran: Iterable[str] | None = None,
     ledger: dict[str, int] | None = None,
     obligations: dict[str, int] | None = None,
+    references: dict[str, int] | None = None,
     whole_proof: dict[str, str] | None = None,
     statement_audit: str = NOT_RUN,
     models: dict[str, str] | None = None,
@@ -152,6 +162,7 @@ def build(
         deterministic=deterministic_block(families, families_ran),
         ledger=dict(ledger or {}),
         obligations=dict(obligations or {}),
+        references=dict(references or {}),
         whole_proof=dict(whole_proof or {}),
         statement_audit=statement_audit,
         models=dict(models or {}),
@@ -185,6 +196,13 @@ def compact(record: VerificationRecord | None) -> str:
                 n=led.get("claims", 0),
                 u=led.get("unsourced", 0),
                 c=led.get("checked", 0),
+            )
+        )
+    if record.references:
+        rf = record.references
+        bits.append(
+            "citations: {v}/{t} verified, {f} flagged".format(
+                v=rf.get("verified", 0), t=rf.get("total", 0), f=rf.get("flagged", 0)
             )
         )
     if record.obligations:

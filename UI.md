@@ -265,6 +265,35 @@ the claim is sourced.
 **What this does not guarantee:** that the ledger is *complete*. Every claim in it
 is sourced or errors; a load-bearing claim the extractor never listed is invisible.
 
+### 4.6a The statement itself (target only)
+
+Shown on the target theorem, because that statement is what the entire project is
+built on and nothing used to examine it.
+
+| You see | Means |
+|---|---|
+| *This statement has never been audited* + **Audit the statement** | `TGT001`. Four fixed questions, one call. An ambiguity or a citation to nothing here is inherited by every child. |
+| *Audited, but the statement has been edited since* | `TGT002`. The audit was about different words. |
+| *Statement audited.* | `audited_against` matches the current statement hash. |
+
+The audit still never changes a status — its findings are prompts for your attention
+(§5.7). What is recorded is only *that it happened, against these words*.
+
+### 4.6b Citations
+
+Every `\ref`-family citation this node's text makes, with what it points at:
+
+```
+\eqref  eq:riccati → gclm.blowup   (in the statement)
+\ref    sec-space → nothing defines this (XRF001)
+```
+
+Unresolved ones are **orange** and are a hard error. Resolved cross-node ones also
+become one question each for the verifier at `--level standard`: *does the cited text
+say what this passage uses it for?* That catches what a compiler cannot — a display
+that **defines** something cited as though it **asserted** something, a bound cited as
+a strict inequality, a statement about $\omega_0$ applied to $\omega(t)$.
+
 ### 4.7 Verification record
 
 One line saying what this node's status is actually worth:
@@ -281,6 +310,7 @@ whole proof: verifier_a=no_objection, verifier_b=no_objection; at 2026-07-30T…
 | `deterministic: all pass` | Per check family, from the last verification. `fail` means that family produced an **error**; warnings deliberately do not fail a node. `not_run` means the level did not include it. |
 | `ledger: N claim(s), U unsourced, C checked` | `checked` is 0 below `deep` — the claims were enumerated and audited for having sources, not judged. |
 | `obligations: v/t verified, f flagged, c cached` | `t` is what the code *generated*, so a clean run means all `t` enumerated questions were answered — not "nothing caught my eye". `cached` was reused from an identical earlier question. |
+| `citations: v/t verified, f flagged` | Cross-node citations checked one at a time. `XRF001` answers whether each *exists*; this answers whether the cited text supports the use made of it. |
 | `whole proof: verifier_a=…` | `no_objection` / `objection_confirmed` / `objection_withdrawn` / `did_not_answer`. **Silence is not agreement:** if every member reads `did_not_answer` the node is flagged for absence of evidence, not presence of a problem — check the Agents sheet. |
 | `statement audit: pass` | Only at `deep`. Weaker than it sounds; see §5.7. |
 | `never verified` | No record at all. Distinct from a record that implies flagged. |
@@ -463,6 +493,9 @@ warning, blue = note.
 | `LED001`–`LED006` | The claim ledger: an unsourced claim, a source naming a non-existent child/hypothesis/claim, a forward or self-reference, a vague literature citation, a computation with no artifact. |
 | `LED100` | The ledger was extracted from an earlier version of the proof. |
 | `SCH001`–`SCH003` | A file that would not parse at all (reported rather than crashing), an unknown frontmatter key, `verified` with no proof and no children. |
+| `XRF001`–`XRF005` | Cross-references: a citation to a label nothing defines, the same label defined twice, a citation out of scope, a citation into another node's proof, a label nothing cites. |
+| `TEX001`–`TEX002` | Authored LaTeX that fails *silently*: a mid-line `%` that deletes the rest of a line, an unbalanced `$`. |
+| `TGT001`–`TGT002` | The target theorem's statement has never been audited, or was audited against earlier wording. |
 | `SYS001` | The computed fields in a file are out of date. Harmless; run `bp sweep`. |
 
 `LED005`, `LED006` and `USE001` are warnings on purpose. A real result vaguely

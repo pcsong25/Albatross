@@ -595,6 +595,43 @@ def record_ledger(
 
 
 @serialised
+def record_audit(
+    project: Project,
+    node_id: str,
+    verdict: str,
+    findings: str = "",
+    actor: str = "auditor",
+) -> Result:
+    """The only writer of ``audited_against``.
+
+    A statement audit is not a verification: it never touches ``local_status``, and
+    its findings are prompts for attention rather than checks (`DECISIONS.md` D049).
+    But *whether one has ever happened* has to be recordable, because the alternative
+    is what happened in practice — a target theorem citing a section nobody had
+    written, decomposed into seven children, with nothing anywhere able to say that
+    its statement had never been examined.
+
+    The hash is what makes it a certificate rather than a boolean: edit the statement
+    and the audit no longer describes it.
+    """
+    graph = open_graph(project)
+    node = graph.get(node_id)
+    if node is None:
+        raise OpError(f"no node {node_id!r}")
+    digest = node.statement_hash or ""
+    node.audited_against = digest
+    set_frontmatter(node, "audited_against", quoted(digest))
+    write_node(node)
+    if findings.strip():
+        add_note(project, node_id, findings.strip(), actor=actor)
+        graph = open_graph(project)
+        node = graph[node_id]
+    return _finish(
+        project, graph, node, "record_audit", {"verdict": verdict}, actor=actor
+    )
+
+
+@serialised
 def record_verification(
     project: Project,
     node_id: str,

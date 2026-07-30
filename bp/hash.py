@@ -75,7 +75,7 @@ XREF_PREFIX = "xref:"
 
 
 def xref_dependencies(node: Node, graph) -> dict[str, str]:
-    """Nodes whose *statements* this node's text points at with ``\ref``/``\eqref``.
+    r"""Nodes whose *statements* this node's text points at with ``\ref``/``\eqref``.
 
     A cross-reference is a dependency, and it is not one the ``children`` relation
     records. That matters for exactly one reason, and it is a silent one: without

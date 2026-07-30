@@ -44,7 +44,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .. import ops, verification
+from .. import ops, verification, xref as xref_mod
 from ..agents.base import AgentError, BudgetExceeded, CallMeta, ReplayMiss
 from ..agents.registry import Registry
 from ..checks import load_graph
@@ -64,10 +64,18 @@ CACHE_NAME = "obligations.json"
 LEVEL_JOBS: dict[str, frozenset[str]] = {
     verification.QUICK: frozenset({"whole_proof", "confirm"}),
     verification.STANDARD: frozenset(
-        {"extract", "obligations", "whole_proof", "confirm"}
+        {"extract", "obligations", "references", "whole_proof", "confirm"}
     ),
     verification.DEEP: frozenset(
-        {"extract", "obligations", "claims", "audit", "whole_proof", "confirm"}
+        {
+            "extract",
+            "obligations",
+            "references",
+            "claims",
+            "audit",
+            "whole_proof",
+            "confirm",
+        }
     ),
 }
 
@@ -170,6 +178,10 @@ class VerifyReport:
     claims_checked: int = 0
     claims_cached: int = 0
     claims_flagged: int = 0
+    references_total: int = 0
+    references_checked: int = 0
+    references_cached: int = 0
+    references_flagged: int = 0
     ledger_claims: int = 0
     ledger_unsourced: int = 0
     ledger_ran: bool = False
@@ -258,6 +270,32 @@ def claim_prompt(record: dict[str, Any]) -> str:
             "**What that source says**:",
             "",
             record["source_text"] or "(the source is free text, quoted above)",
+        ]
+    )
+
+
+def reference_prompt(record: dict[str, Any]) -> str:
+    """One citation: the passage that cites, and the text cited.
+
+    The passage matters as much as the target. Asking "does equation (3) exist" is a
+    question code already answered; asking "does equation (3) give what this sentence
+    draws from it" is the one that needed a reader.
+    """
+    return "\n".join(
+        [
+            "## The citation",
+            "",
+            f"The {record['target_section']} of `{record['parent']}` cites "
+            f"`\\{record['command']}{{{record['reference']}}}`, which points into the "
+            f"{record['target_section']} of `{record['target']}`.",
+            "",
+            "**The passage doing the citing** (the reference appears inside it):",
+            "",
+            record["needed"] or "(the passage is empty)",
+            "",
+            f"**What `{record['target']}` actually says**:",
+            "",
+            record["source_text"] or "(that section is empty)",
         ]
     )
 
@@ -485,7 +523,77 @@ def verify_claims(
     return report
 
 
-# --- job 3: the whole-proof pass ----------------------------------------------
+def verify_references(
+    project: Project,
+    node_id: str,
+    *,
+    registry: Registry | None = None,
+    report: VerifyReport | None = None,
+    use_cache: bool = True,
+    batch: int = 1,
+) -> VerifyReport:
+    """Job 3: every cross-node citation this node's text makes.
+
+    This job exists because of a specific failure. A target's statement said "in the
+    setting of Section \\ref{sec-space}" for a section nobody had written, and four
+    layers missed it: nothing examined the target when it was written, the decomposer
+    propagated the phrase into every child, the verifier passed their proofs, and
+    LaTeX only warned. They failed for one reason — **nobody enumerated the
+    references** — which is this system's recurring lesson applied to citations.
+
+    ``XRF001`` now answers *existence* in code. This answers the other two questions
+    a compiler cannot: does the cited text say what the citing passage uses it for,
+    and can it be applied here?
+    """
+    registry = registry or Registry(project)
+    report = report or VerifyReport(node=node_id)
+    graph, _, swept = load_graph(project)
+    if not swept:
+        raise ops.OpError("the graph has a cycle; run `bp check` first")
+    node = graph.get(node_id)
+    if node is None:
+        raise ops.OpError(f"no node {node_id!r}")
+
+    records = xref_mod.reference_obligations_for(node, graph)
+    report.references_total = len(records)
+    if not records:
+        return report
+
+    verdicts, cached, calls = _check_records(
+        project,
+        records,
+        registry=registry,
+        prompt_name="verify_reference",
+        render=reference_prompt,
+        batch=batch,
+        use_cache=use_cache,
+    )
+    report.references_cached += cached
+    report.references_checked += len(verdicts)
+    report.calls.extend(calls)
+    report.models.setdefault("reference", registry.agent("obligation").model)
+
+    for record, verdict in verdicts:
+        if verdict.entails:
+            report.checked.append(
+                f"citation \\{record['command']}{{{record['reference']}}} "
+                f"-> {record['target']}"
+            )
+        else:
+            report.flags.append(
+                Flag(
+                    source="reference",
+                    section=record["target_section"],
+                    quote=record["needed"][:400],
+                    kind="citation-misuse",
+                    why=verdict.why,
+                    raised_by=f"reference:{report.models.get('reference', '?')}",
+                )
+            )
+    return report
+
+
+# --- job 4: the whole-proof pass ----------------------------------------------
 
 
 def verify_proof(
@@ -680,6 +788,10 @@ def verify(
         verify_obligations(
             project, node_id, registry=registry, report=report, batch=batch
         )
+    if "references" in jobs and obligations:
+        verify_references(
+            project, node_id, registry=registry, report=report, batch=batch
+        )
     if "claims" in jobs and obligations:
         verify_claims(project, node_id, registry=registry, report=report, batch=batch)
 
@@ -694,6 +806,7 @@ def verify(
 
     report.obligations_flagged = sum(1 for f in report.flags if f.source == "obligation")
     report.claims_flagged = sum(1 for f in report.flags if f.source == "claim")
+    report.references_flagged = sum(1 for f in report.flags if f.source == "reference")
 
     from .. import checks
 
@@ -719,6 +832,14 @@ def verify(
             "cached": report.obligations_cached,
         }
         if "obligations" in jobs and obligations
+        else {},
+        references={
+            "total": report.references_total,
+            "verified": report.references_checked - report.references_flagged,
+            "flagged": report.references_flagged,
+            "cached": report.references_cached,
+        }
+        if "references" in jobs and obligations
         else {},
         whole_proof=report.panel,
         statement_audit=report.statement_audit,
@@ -823,6 +944,12 @@ def summarise(report: VerifyReport) -> str:
             f"  ledger: {report.ledger_claims} claim(s), "
             f"{report.ledger_unsourced} unsourced, {report.claims_checked} checked"
         )
+    if report.references_total:
+        lines.append(
+            f"  citations: {report.references_checked} of "
+            f"{report.references_total} checked "
+            f"({report.references_cached} from cache)"
+        )
     if report.obligations_total or report.obligations_checked:
         lines.append(
             f"  obligations: {report.obligations_checked} of "
@@ -874,5 +1001,6 @@ __all__ = [
     "verify",
     "verify_claims",
     "verify_obligations",
+    "verify_references",
     "verify_proof",
 ]

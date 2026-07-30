@@ -720,6 +720,62 @@ async function showDetail(id) {
     }
   }
 
+  // --- has anybody read this statement?
+  //
+  // The layer that was missing entirely: a target theorem citing a section nobody
+  // had written was decomposed into seven children before anyone noticed.
+  if (node.target) {
+    const box = el('div', { class: node.audited_against ? 'row small muted' : 'warnbox' });
+    if (!node.audited_against) {
+      box.append(el('div', {}, el('b', {}, 'This statement has never been audited. ')));
+      box.append(el('div', { class: 'small' },
+        'Everything in the project is built on it, so an ambiguity or a citation to ' +
+        'nothing here is inherited by every child and much more expensive to find ' +
+        'later. Four fixed questions, one call.'));
+      box.append(el('button', {
+        ...(busy ? { disabled: 'disabled' } : {}),
+        onclick: () => runJob('audit', node.id),
+      }, 'Audit the statement'));
+    } else if (node.audited_against !== node.statement_hash) {
+      box.append('Audited, but the statement has been edited since — the audit was ' +
+                 'about different words.');
+      box.append(el('button', {
+        ...(busy ? { disabled: 'disabled' } : {}),
+        onclick: () => runJob('audit', node.id),
+      }, 'Audit again'));
+    } else {
+      box.append('Statement audited.');
+    }
+    panel.append(el('h3', { class: 'section' }, 'The statement itself'));
+    panel.append(box);
+  }
+
+  // --- citations
+  if ((node.refs || []).length) {
+    panel.append(el('h3', { class: 'section' }, 'Citations'));
+    const list = el('div', { class: 'uses' });
+    for (const r of node.refs) {
+      const known = state.labels && state.labels[r.name];
+      const row = el('div', { class: 'dis' + (known ? '' : ' admitted') });
+      row.append(el('span', { class: 'hid' }, '\\' + r.command));
+      if (known) {
+        row.append(el('a', { class: 'noderef', onclick: () => select(known.node) },
+                      `${r.name} → ${known.node}`));
+        row.append(el('span', { class: 'muted small' }, `  (in the ${r.section})`));
+      } else {
+        row.append(el('span', {}, `${r.name} → nothing defines this (XRF001)`));
+      }
+      list.append(row);
+    }
+    panel.append(list);
+    if ((node.reference_obligations || []).length) {
+      panel.append(el('div', { class: 'row small muted' },
+        `${node.reference_obligations.length} citation(s) go to the verifier as ` +
+        'individual questions at level standard: does the cited text say what this ' +
+        'passage uses it for?'));
+    }
+  }
+
   // --- the verification record
   //
   // `verified` must not be an opaque flag: a node checked at `quick` and one

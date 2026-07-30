@@ -182,9 +182,19 @@ def audit(
     )
     report = AuditReport(node=node_id, audit=result, calls=[meta])
 
-    if apply and not result.clean:
-        ops.add_note(project, node_id, note_text(result), actor="auditor")
-        report.noted = True
+    if apply:
+        # Record that an audit happened, against the statement it happened to. Its
+        # *findings* are prompts for attention and never touch a status (D049) — but
+        # whether one has ever run is a fact `TGT001` needs, because the alternative
+        # is a target theorem nobody has read being decomposed into a whole project.
+        ops.record_audit(
+            project,
+            node_id,
+            report.verdict,
+            findings=note_text(result) if not result.clean else "",
+            actor="auditor",
+        )
+        report.noted = not result.clean
     return report
 
 

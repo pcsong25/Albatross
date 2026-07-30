@@ -34,6 +34,7 @@ import re
 from dataclasses import dataclass, field
 
 from .diagnostics import Diagnostic, err, warn
+from .hash import canonical_statement, content_hash
 from .model import PROOF, STATEMENT, Node
 
 #: ``\label{...}``. Anything else that defines a target — ``\tag`` does not, and
@@ -430,6 +431,105 @@ def display_map(graph, project, index: Index | None = None) -> dict[str, dict[st
     return out
 
 
+# --- reference obligations -----------------------------------------------------
+#
+# The third worklist, and it exists because of a specific failure. The target's
+# statement said "in the setting of Section \ref{sec-space}" for a section that was
+# never written. Four layers could have caught that and none did: nothing examined
+# the target when it was written; the decomposer propagated the phrase into seven
+# children without noticing; the verifier passed their proofs; and LaTeX only warned
+# and printed `??`.
+#
+# They all failed for one reason. **Nobody enumerated the references.** That is this
+# codebase's recurring lesson — a thing nobody enumerates is a thing nobody checks —
+# and it applies to citations exactly as it does to hypotheses (`DIS011`) and claims
+# (`LED001`).
+#
+# So `XRF001` answers *existence* deterministically, and these records send the other
+# two questions to a verifier, one at a time: does the referenced text say what this
+# use of it assumes, and can it be applied here?
+
+#: How much text either side of a reference to send, so the verifier can see what the
+#: reference is being used *for* rather than only what it points at.
+CONTEXT_CHARS = 320
+
+
+def _sentence_around(text: str, position: int) -> str:
+    """The clause a reference sits in.
+
+    A reference on its own — ``\\eqref{eq:riccati}`` — is unanswerable: the question is
+    not "does this equation exist" (code answers that) but "does it support the claim
+    being made from it", and that claim is in the surrounding prose.
+    """
+    start = max(0, position - CONTEXT_CHARS)
+    end = min(len(text), position + CONTEXT_CHARS)
+    fragment = text[start:end].strip()
+    return " ".join(fragment.split())
+
+
+def reference_obligations_for(node: Node, graph, index: Index | None = None) -> list[dict]:
+    """One record per cross-node reference in this node's text.
+
+    Only cross-node ones: a reference to a display in the same node is a matter of
+    internal bookkeeping, and the whole-proof pass reads that text anyway. And only
+    references that *resolve* — a dangling one is already `XRF001`, decided
+    deterministically, and sending it to a model would invite the model to imagine
+    what it might have pointed at.
+    """
+    index = index if index is not None else index_for(graph)
+    out: list[dict] = []
+    for section in (STATEMENT, PROOF):
+        text = _live(node.section(section))
+        for m in REF_RE.finditer(text):
+            for name in (n.strip() for n in m.group(2).split(",")):
+                if not name:
+                    continue
+                label = index.define(name)
+                if label is None or label.node == node.id:
+                    continue
+                other = graph.get(label.node)
+                if other is None:
+                    continue
+                record = {
+                    "id": f"ob:{node.id}:ref:{name}",
+                    "kind": "reference",
+                    "parent": node.id,
+                    "reference": name,
+                    "command": m.group(1),
+                    "target": label.node,
+                    "target_section": label.section.lower(),
+                    "applied_to": "",
+                    # What the citing text claims *from* the reference.
+                    "needed": _sentence_around(text, m.start()),
+                    "claimed_source": f"{label.node}:{name}",
+                    "source_kind": "reference",
+                    "source_text": (
+                        other.statement_section.strip()
+                        if label.section == STATEMENT
+                        else other.proof_section.strip()
+                    ),
+                }
+                record["hash"] = content_hash(
+                    {
+                        "parent": record["parent"],
+                        "reference": name,
+                        "target": record["target"],
+                        "needed": canonical_statement(record["needed"]),
+                        "source_text": canonical_statement(record["source_text"]),
+                    }
+                )
+                out.append(record)
+    return out
+
+
+def all_reference_obligations(graph) -> list[dict]:
+    index = index_for(graph)
+    out: list[dict] = []
+    for node_id in sorted(graph.active):
+        out.extend(reference_obligations_for(graph[node_id], graph, index))
+    return out
+
+
 def obligations_note(index: Index, node_id: str) -> str:
     """Context for a role: which cross-node references this node's text makes.
 
@@ -459,7 +559,9 @@ def obligations_note(index: Index, node_id: str) -> str:
 
 
 __all__ = [
+    "CONTEXT_CHARS",
     "Index",
+    "all_reference_obligations",
     "LABEL_RE",
     "Label",
     "REF_RE",
@@ -471,6 +573,7 @@ __all__ = [
     "labels_in",
     "numbers_from_aux",
     "obligations_note",
+    "reference_obligations_for",
     "refs_in",
     "resolved_numbers",
     "summarise",

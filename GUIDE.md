@@ -438,6 +438,39 @@ before everything that uses it.
 That is what `Section \ref{sec-space}` in a child's hypotheses actually wanted to
 be.
 
+### Citations are checked, in four places
+
+This is worth a paragraph because it is the one thing in the system that was
+comprehensively broken, and the fix is layered.
+
+A statement that says "let $\omega_0$ be as in Section \ref{sec-space}" for a
+section that does not exist used to survive **everything**: no check looked at the
+target when it was written, the decomposer split it into seven children that all
+inherited the phrase, and the verifier passed their proofs. Now:
+
+1. **`bp check` errors** on the reference itself (`XRF001`).
+2. **`bp expand` refuses** to decompose a statement carrying errors of its own,
+   naming them, before spending a call. Everything downstream would inherit them.
+   `--force` overrides if you are mid-edit.
+3. **`bp verify` cannot pass it**, at any level, however sure the models are: the
+   `xref` family is part of the verification record, so a dangling citation derives
+   `flagged`.
+4. **Each citation that *does* resolve becomes a question for the verifier** at
+   `--level standard`: does the cited text say what this passage uses it for? That
+   catches the case a compiler never could — a display that *defines* something being
+   cited as though it *asserted* something, a bound cited as a strict inequality, a
+   statement about $\omega_0$ applied to $\omega(t)$.
+
+And separately, **the target theorem itself is now checked.** `TGT001` says when
+nobody has audited it and `TGT002` when the audit predates the current wording. Run
+`bp audit <target>` — or the button on the target's panel — before you decompose.
+Everything in the project is built on that statement, so an ambiguity or a citation
+to nothing in it is inherited by every child and much more expensive to find later.
+
+*What this does not cover:* a citation written as prose — "by standard elliptic
+regularity" — is not a `\ref`, so it is not enumerated. It reaches the system only if
+claim extraction lists it, which is §8a's known soft spot.
+
 ### Things that break, and what they look like
 
 The renderer passes your LaTeX through — it does not escape it, because escaping
@@ -769,7 +802,7 @@ Deterministic — no key, no network, no configuration:
 | `bp frontier` | what to work on next |
 | `bp why [id]` | the status chain, in English |
 | `bp check [--format json]` | every check. Exit 1 on error |
-| `bp obligations [id] [--kind discharge\|claim\|all]` | the worklists as JSON: one record per discharge, one per sourced claim |
+| `bp obligations [id] [--kind discharge\|claim\|reference\|all]` | the worklists as JSON: one record per discharge, per sourced claim, and per citation |
 | `bp render [--clean] [--audit] [--pdf] [-o F]` | the LaTeX document; `--pdf` compiles it and explains any failure |
 | `bp labels` | every `\label`, everything referencing it, and everything referenced that does not exist |
 | `bp events` / `bp jobs` / `bp calls` | history |
@@ -788,7 +821,7 @@ Agents — these call models and cost time or money:
 | `bp check-decomp <id>` | the two checker calls |
 | `bp extract <id>` | build the claim ledger, then audit it |
 | `bp verify <id> [--level L] [--batch N] [--no-record]` | the three jobs the level calls for, then confirmation |
-| `bp audit <id>` | the four statement questions. Never changes a status |
+| `bp audit <id>` | the four statement questions. Never changes a status, but does record that it ran — `TGT001` |
 | `bp prove <id> [--force]` | write a proof for an easy leaf |
 | `bp recompile [--level L] [--dry-run] [--budget N] [--batch N]` | verify everything stale or unverified |
 | `bp resume [job_id]` | continue an interrupted recompile |
@@ -808,7 +841,13 @@ Be clear-eyed about the gaps. Each is a known deferral with a row in
 `UPGRADE.md`.
 
 - **Misattributed discharges** — see §8. The verifier is asked; the check is not.
-- **Whether the claim ledger is complete** — see §8a. Every claim *in* it is
+- **Whether the claim ledger is complete** — see §8a.
+- **Citations written as prose.** `\ref`-family citations are enumerated and checked
+  (§6a); "by standard elliptic regularity" is not, unless claim extraction happens to
+  list it.
+- **Whether a `literature:` reference is real.** `LED005` warns when one names
+  nothing findable, and that is all it can do — there is no bibliography to check
+  against. Every claim *in* it is
   sourced or errors; a claim the extractor never listed is invisible. This is the
   gap the design is least protected against, and the tell is a whole-proof
   objection about a step that is not in the ledger.
@@ -834,6 +873,12 @@ Be clear-eyed about the gaps. Each is a known deferral with a row in
   `pdflatex`, not by `bp check` — so **Open PDF** is part of checking your work,
   not just of reading it.
 - **Whether the claim ledger is complete** — see §8a.
+- **Citations written as prose.** `\ref`-family citations are enumerated and checked
+  (§6a); "by standard elliptic regularity" is not, unless claim extraction happens to
+  list it.
+- **Whether a `literature:` reference is real.** `LED005` warns when one names
+  nothing findable, and that is all it can do — there is no bibliography to check
+  against.
 
 ---
 

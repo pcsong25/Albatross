@@ -111,6 +111,57 @@ def latex_text(node: Node) -> list[Diagnostic]:
     return d
 
 
+def target_examined(graph: Graph) -> list[Diagnostic]:
+    """``TGT001``–``TGT002``: has anybody looked at the theorem itself?
+
+    This is the layer that was simply absent, and the omission had a cost. A target
+    theorem was written whose statement said "in the setting of Section
+    \\ref{sec-space}" — a section that was never provided. Nothing examined the
+    target when it was written; the decomposer split it into children that inherited
+    the incoherence; the verifier passed their proofs. The statement of the thing the
+    whole project is about had never been read by any part of the system.
+
+    Every other check here is about a node's *relationships*. This one is about the
+    root of the graph being self-contained before anything is built on it, which is
+    the one place where getting it wrong invalidates everything downstream.
+    """
+    d: list[Diagnostic] = []
+    targets = [n for n in graph.active.values() if n.target]
+    for node in targets:
+        if not node.statement_section.strip():
+            continue
+        if node.audited_against is None:
+            d.append(
+                warn(
+                    "TGT001",
+                    node,
+                    "the target theorem's statement has never been audited",
+                    hint="run `bp audit "
+                    + node.id
+                    + "` before decomposing it. Four fixed questions — is every "
+                    "symbol bound, can the hypotheses be jointly satisfied, are the "
+                    "quantifiers in the intended order, does a constant depend on "
+                    "something it is treated as uniform in. Everything in the project "
+                    "is built on this statement, so an ambiguity or a dangling "
+                    "reference in it is inherited by every child and is much more "
+                    "expensive to find later.",
+                )
+            )
+        elif node.audited_against != node.statement_hash:
+            d.append(
+                warn(
+                    "TGT002",
+                    node,
+                    "the target theorem's statement has been edited since it was "
+                    "audited",
+                    hint="run `bp audit "
+                    + node.id
+                    + "` again. The audit was about different words.",
+                )
+            )
+    return d
+
+
 def schema_hygiene(node: Node) -> list[Diagnostic]:
     """``SCH002``/``SCH003`` — cheap protection for hand-edited files."""
     d: list[Diagnostic] = []
@@ -265,6 +316,7 @@ def run(project: Project) -> Report:
     # Whole-graph, after the per-node pass: a reference and its label are in
     # different files, so neither node alone can tell whether the pair is sound.
     diagnostics.extend(xref_mod.check_xref(graph))
+    diagnostics.extend(target_examined(graph))
 
     if swept:
         diagnostics.extend(drift(graph))

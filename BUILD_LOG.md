@@ -646,3 +646,163 @@ produces a record with an empty `whole_proof` block, which correctly reads as
 "nobody looked at this proof". The old code computed the verdict from flags alone
 and would happily have written `verified` for a node no verifier had read. Now it
 refuses up front. Deriving the status did not create that bug; it revealed it.
+
+---
+
+## L3 round two — the LaTeX round
+
+**Date** 2026-07-30
+
+Four things reported: "Render LaTeX" gave an internal server error; `enumitem` did
+not work although it was in `preamble.tex`; `\label`/`\ref` did not work; and
+cross-references between nodes were wanted, "maintaining a live and unified latex
+file" being the suggested mechanism. Plus a user's guide, for open-sourcing.
+
+### What was actually wrong
+
+The reported bug took twenty minutes: `/api/render.pdf` raised **500** when pdflatex
+failed, and the browser reached it by `window.open`, so the useful detail landed in a
+new tab as raw JSON. And `enumitem.sty` is simply **not installed** here — this is
+BasicTeX — so the user's unguarded `\usepackage` was a hard failure the tool declined
+to explain.
+
+Then I went looking for the rest, and the rest was worse. Every item below was
+reproduced before being fixed.
+
+**A document that says "is proved" because a node file would not parse.** One YAML
+typo in a child; `load_nodes` skips it; the parent has one fewer child; the sweep
+finds nothing unfinished; `bp render` emits *"top is proved. It rests on no admitted
+step, no assumption and no unfinished lemma"* with the missing lemma nowhere in it,
+and exits 0. Of everything in this log, that is the one that most directly violates
+the point of the system.
+
+**A pasted-in preamble could not compile.** `\newtheorem{lemma}` → "Command \lemma
+already defined"; `\usepackage[hidelinks]{hyperref}` → "Option clash". Both certain
+to appear in a real mathematician's preamble, both fatal on the first try.
+
+**A blank line in a verifier objection killed the build.** `\bpmark` was a short
+`\newcommand` taking model-written free text. `\long\def` was necessary and not
+sufficient: `\textcolor{...}{#3}` is another short argument.
+
+**A blocked chain five deep made the document uncompilable** — one nested `itemize`
+per level, and `article` permits four.
+
+**Open PDF downloaded rather than displayed** (Starlette defaults the disposition to
+`attachment` once a filename is given), **compiled four times per click**, and
+**corrupted under concurrency**: ten of thirty-six parallel requests returned 200
+with a body that was not a PDF, including a zero-byte one.
+
+**A failing compile served the previous run's PDF**, because the code checked only
+`pdf.exists()`.
+
+**pdflatex wraps its log at 79 columns mid-token**, so nine undefined references were
+reported as four.
+
+**The appendix was a divergent copy of the entry template** and gave an ADMITTED node
+a QED box — a claim of proof in the one place the document must not make one.
+
+### Cross-references
+
+They already worked. Every node renders into one document and pdflatex runs twice; a
+`\label` in one node resolves from another, verified by reading the `.aux`. What was
+missing was every guarantee, and all of it silent: a dangling reference is a LaTeX
+*warning* that prints `??`, a duplicated label resolves to one at random, the browser
+rendered `\eqref` as literal garbage with **no error node**, and a reference was a
+dependency the graph did not record.
+
+`bp/xref.py` is a derived index — recomputed on every load like `Graph`, stored
+nowhere. Which is also the answer to the stateful `.tex` file: forbidden by
+non-negotiable 2, and unnecessary, because the renderer already produces the unified
+document the user wanted. `XRF001`–`XRF005`; browser references become clickable
+chips carrying the number LaTeX assigned, via `\tag`, which KaTeX does support.
+
+```
+bp check        2 errors on the fixture — both deliberate
+pytest -q       518 passed (was 390)
+render          default, --audit and --clean all compile
+```
+
+### What surprised me
+
+**The user's premise was wrong and their goal was right.** "Maintain a live unified
+`.tex`" is exactly the thing this codebase forbids, and the reason they wanted it —
+working cross-references with real numbers — needed no state at all. Worth
+separating those two before answering.
+
+**An adversarial review found the hole in what I had just built, and it was the
+silent kind.** `verified_against` records `self` plus each child's hash; a node
+referencing another node's equation had no key for it, so editing that equation left
+the referrer green. That is *under*-invalidation, which `bp/hash.py` exists to rule
+out — it over-invalidates on purpose everywhere else. Two of three reviewers wanted
+child→parent references to be a hard error, and this was their strongest argument;
+closing it properly is what lets the check stay a warning and lets the user have what
+they asked for.
+
+**`\long\def` is not enough.** I fixed the short-argument bug and it still failed,
+because `\textcolor{...}{#3}` puts the same free text into another short argument. A
+fix that addresses the mechanism I noticed rather than the mechanism that failed is
+not a fix; testing it was the only reason I found out.
+
+**A pip install of this had never worked.** `pyproject.toml` shipped only
+`templates/*.j2`, so an installed copy had no prompts and no web interface at all.
+Invisible from a source checkout, fatal for every other user — and the whole point of
+this round was preparing to open-source it. There is now a test that builds a real
+wheel.
+
+**`ops.unarchive` had existed since L0 and was reachable from nothing.** "Nothing is
+destroyed" was a promise about the filesystem; the only way back was hand-editing
+`lifecycle`.
+
+### The citation layer (same round, after the user traced the reference)
+
+The user found where `Section \ref{sec-space}` came from: **the statement of the
+target theorem**, citing a section that was never provided. Their diagnosis was
+right and sharper than mine had been:
+
+> the self-containedness, consistency and completeness of the target theorem is never
+> examined … at later expansion none of the children nodes has found out this issue …
+> the verifier even passed the local proof. It means that there is a logic hole under
+> the whole system.
+
+Four layers had the information and none acted. They failed for one reason, and it is
+this project's recurring lesson arriving a third time: **nobody enumerated the
+references.** `DIS011` works because code iterates another node's `hypotheses`.
+`LED001` works because code iterates an extracted ledger. Citations had no list, so
+no layer could be asked a complete question about them, and each layer's silence
+looked like assent.
+
+Four answers, one per layer:
+
+1. **`TGT001`/`TGT002`** — the target's statement has never been audited, or was
+   audited against different words. Backed by `audited_against`, a statement-hash
+   certificate written only by `ops.record_audit`. This is the layer that did not
+   exist at all: nothing had ever looked at the root statement.
+2. **`bp expand` refuses** a node whose own statement carries `xref` or `latex`
+   errors, naming them, before spending a call. And the decomposer now gets
+   `context.xref_block`, so it is told what its node cites — it had nothing.
+3. **The verifier cannot pass it.** `xref` is a family in the verification record,
+   so a dangling citation derives `flagged` at `quick`, with both panel members
+   saying "no objection".
+4. **Citations are obligations.** `reference_obligations_for` emits one record per
+   resolving cross-node citation, checked at `--level standard` — a citation is as
+   load-bearing as a hypothesis — carrying the *citing passage* as well as the cited
+   text, because the question was never "does equation (3) exist" but "does equation
+   (3) give what this sentence draws from it".
+
+```
+pytest -q       540 passed
+bp check        the reported statement now fires XRF001 + TGT001
+bp expand       refuses it, naming the code, before spending a call
+bp verify       flagged at quick even with both verifiers clean
+```
+
+**What surprised me.** The prompt for the citation check had to name a failure I had
+not thought of and which is probably the commonest: **a display that *defines*
+something being cited as though it *asserted* something.** `\eqref{eq:defn}` where
+the display is `z(t) := -\partial_x\omega(t,0)` gives nothing at all, because a
+definition asserts nothing — and it reads exactly like a citation that works.
+
+**What I got wrong first.** I had already built `XRF001` before the user wrote, and I
+thought that closed it. It closed one layer of four. The user's framing — *a logic
+hole under the whole system* — was the correct unit of analysis, and mine (*a missing
+check*) was not.

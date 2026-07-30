@@ -170,6 +170,8 @@ def node_detail(graph: Graph, node: Node) -> dict[str, Any]:
         ],
         "obligations": obligations_for(node, graph),
         "claim_obligations": ledger_mod.claim_obligations_for(node, graph),
+        "reference_obligations": xref_mod.reference_obligations_for(node, graph),
+        "audited_against": node.audited_against,
         "claims": [c.model_dump() for c in node.claims],
         "ledger_stale": ledger_mod.ledger_is_stale(node),
         "ledger_diagnostics": [d.model_dump() for d in ledger_mod.check_ledger(node)],

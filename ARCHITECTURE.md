@@ -32,6 +32,8 @@ enumerated, assigned a source, and dispatched to a verifier *can* be, and is.
 | Does the named source actually give that hypothesis | **agent** — obligation check |
 | Is every load-bearing claim in the proof sourced at all | code (`LED001`), over an agent-produced ledger |
 | Is each sourced claim justified by its source | **agent** — claim check |
+| Does a cited reference exist, once, unambiguously | code (`XRF001`, `XRF002`) |
+| Does the cited text support the use made of it | **agent** — citation check |
 | Does the parent follow from the children's conclusions | **agent** — whole-proof pass |
 | Is the statement well-posed, non-vacuous, correctly quantified | **agent** — statement audit |
 | Which nodes are proved, given all of the above | code — propagation sweep |
@@ -63,6 +65,19 @@ every sweep, and no agent can affect them:
   from a model deciding what is worth checking. Nothing is skipped because a
   model failed to notice it needed checking, and the record on the node says how
   many questions there were and how many were answered.
+- **Every cross-reference resolves to exactly one definition, or there is a hard
+  error** (`XRF001`, `XRF002`); every resolving one becomes an obligation record
+  dispatched to a verifier; and a reference invalidates a verification the same way
+  a citation does, so a `\ref` cannot silently outlive the text it points at. §6b.
+- **The target theorem's statement cannot be silently unexamined.** `TGT001` says
+  when nobody has audited it, `TGT002` when the audit predates the current wording,
+  and `bp expand` refuses to decompose a statement carrying its own deterministic
+  errors. §6c.
+- **The document either renders from a complete graph or does not render.** A node
+  file that will not parse is fatal, not a warning: it used to be skipped, which
+  made the parent's child list shorter and the sweep's answer wrong, and produced a
+  document reading *"is proved. It rests on no admitted step…"* with the missing
+  lemma nowhere in it.
 - **No agent writes a status.** `local_status` is set only by an explicit human
   decision (`bp admit`, `bp assume`) or *derived* from the verification record by
   `bp/verification.py`. `ops.record_verification` re-derives it and refuses a
@@ -168,11 +183,13 @@ nodes/*.md
     ▼
  derived fields          global_status, support, blocked_by, stale, statement_hash
     │
-    ├── bp/checks.py     integrity + discharge + ledger + hygiene → Diagnostics
+    ├── bp/checks.py     integrity + discharge + ledger + xref + latex + hygiene
     ├── bp/discharge.py  the `uses` table → one obligation record per discharge
     ├── bp/ledger.py     the `claims` ledger → one record per sourced claim
+    ├── bp/xref.py       \label / \ref → the label index, and XRF001-XRF005
     ├── bp/why.py        the derived fields, as English
     ├── bp/render.py     the derived fields, as a LaTeX document
+    ├── bp/compile.py    pdflatex, and a classified reason when it refuses
     └── bp/load.py       persist_computed writes them back into the files
 ```
 
@@ -315,7 +332,7 @@ decomposition out of the graph.
 | `blocked_by` | `propagate.sweep` | For a node blocked by its children, which ones. |
 | `statement_hash` | `propagate.sweep` | §4. |
 | `stale` | `propagate.sweep` | §4. |
-| `verified_against` | `ops.record_verification` **only** | The hashes this node's verification was performed against: `self`, plus each child at that moment. |
+| `verified_against` | `ops.record_verification` **only** | The hashes this node's verification was performed against: `self`, each child, and `xref:<id>` for each node its text cross-references (§6b). |
 | `verification` | `ops.record_verification` **only** | §13a. What was actually checked, at what level, by which model — and what `local_status` is derived *from*. |
 | `claims` | `ops.record_ledger` **only** | §6a. The claim ledger: every load-bearing claim the proof makes, with its source. |
 | `claims_of` | `ops.record_ledger` **only** | The hash of the proof text the ledger was extracted from. When it stops matching, `LED100`. |
@@ -634,6 +651,239 @@ settled question, and inviting it to unsettle it.
 
 ---
 
+## 6b. Cross-references, and compiling the document
+
+### The situation this started from
+
+Cross-references between nodes *already worked*, and nobody knew, because
+everything that would have made them trustworthy was missing. Every node renders
+into one document and `pdflatex` runs twice, so a `\label` in one node resolves
+from another — verified by reading the `.aux`. What was silent:
+
+| | |
+|---|---|
+| A `\ref` to a label nothing defines | LaTeX **warns**. The build succeeds and prints `??`. This is how an agent's invented `Section \ref{sec-space}` survived. |
+| The same `\label` in two nodes | LaTeX **warns**. One wins silently, so a reference can resolve to the wrong equation. |
+| A reference in the browser | KaTeX renders `\eqref{eq:m}` as the literal `\eqrefeq:m`, with **no error node** — so `throwOnError: false` never sees it. |
+| A reference as a dependency | The `children` relation did not record it, so nothing that reasons about dependencies knew it existed. |
+
+### `bp/xref.py` — a derived index
+
+The obvious-sounding fix is to keep a live unified `.tex` file. That is forbidden
+by non-negotiable 2, and rightly: a stateful document drifts from the graph and the
+document is what the user reads. It is also unnecessary, because the *renderer*
+already produces one unified document.
+
+So the index is **derived**, in exactly the sense `Graph` is: `labels_in` and
+`refs_in` scan each node's Statement and Proof, `build` assembles a whole-graph
+`Index`, and nothing is stored. It is memoised per `Graph` — staleness is asked once
+per node inside the sweep, so rebuilding it each time would make the sweep
+quadratic — and a `Graph` is rebuilt from the files on every load, so the cache is
+valid for exactly as long as the answer is.
+
+| Code | Sev | Catches |
+|---|---|---|
+| `XRF001` | error | A reference to a label no node defines |
+| `XRF002` | error | The same label defined in two places |
+| `XRF003` | warn | A reference to a node not in scope — an ancestor, or an unrelated node |
+| `XRF004` | warn | A reference *into another node's proof* |
+| `XRF005` | warn | A label nothing references |
+
+The severity split follows this codebase's rule and is worth stating because it was
+argued over: **errors are for silently wrong, warnings for legal but almost always a
+mistake.** `XRF001` and `XRF002` produce a wrong document. `XRF003` and `XRF004`
+produce a correct one with poor structure, and a check that blocks on structure gets
+overruled by habit until nobody reads the family at all.
+
+### Scope, and the question the user actually asked
+
+`in_scope(graph, node)` is the node itself plus everything it cites, transitively.
+Not its ancestors — and that asymmetry is the interesting part.
+
+A parent referencing its child's equation is free: the proof may lean on the
+statements it cites, and the verifier is handed exactly those. A **child**
+referencing its **parent's** equation is `XRF003`, and it costs two things:
+
+1. Reading order is dependency-first, so the child prints *before* the parent and
+   the reference points forward, at something the reader has not met.
+2. The verifier reads that child with its own children as assumptions and **no
+   parent context at all**. It will not know what the reference means, and a model
+   that does not know invents something.
+
+The fix the hint names, and the one worth reaching for whenever a statement says "in
+the setting of Section …": put the shared display or definition in **its own node**
+and cite it from both. The graph then records the dependency, the verifier is handed
+it automatically, and it prints before everything that uses it.
+
+Two of three independent reviewers wanted `XRF003` to be a hard error. Their
+strongest argument was a staleness hole, which is now closed — see below — and with
+it closed what remains is structural rather than wrong. `DECISIONS.md` D051.
+
+### A reference invalidates a verification
+
+This was the hole, and it was the silent kind. `verified_against` held `self` plus
+each child's hash; a node whose statement referenced *another* node had no key for
+it, so editing the referenced equation left the referring node green while the text
+it leans on moved underneath.
+
+That is **under**-invalidation, which `bp/hash.py` exists to prevent: it
+over-invalidates deliberately everywhere else, on raw text with no normalisation,
+because the opposite error lets a certificate outlive the claim it certified. The
+certificate now carries an `xref:<id>` key per referenced node and `is_stale` checks
+them; the prefix is namespaced so an older certificate is not misread. `bp why` names
+the reference, because which thing moved is the whole question.
+
+### Numbers, in the browser
+
+KaTeX cannot resolve a reference but **does** support `\tag`. So the browser strips
+each `\label` and puts back a `\tag` carrying the number LaTeX assigned, and turns
+each `\ref`/`\eqref` in prose into a clickable chip that selects the defining node.
+
+The numbers come from LaTeX's own `.aux`. Predicting them here would mean
+reimplementing LaTeX's counters — `\notag`, multi-line `align`, `\tag`, theorem
+counters shared between environments — and a number that is subtly wrong is worse
+than no number. For the same reason `resolved_numbers` refuses the `.aux` unless it
+is newer than every node file and the preamble: a stale number presented
+confidently is the failure mode, not the absence of one.
+
+### `bp/compile.py` — running pdflatex, and saying what went wrong
+
+A document that will not compile is a fact about the user's LaTeX, not a server
+error. This module classifies a log into one actionable problem: a missing package
+is named with the `tlmgr install` command that fixes it, "Missing $ inserted" points
+at free-text discharge sources, an undefined command points at `preamble.tex`. The
+endpoint returns **422**, and the browser shows it in the sheet the user is looking
+at — a navigation cannot report into the page it leaves, which is why *Open PDF*
+asks `/api/render/compile` first and then opens the artifact that compile produced.
+
+Four things it does that are not obvious:
+
+- **The target is deleted before the run.** The build directory persists, so a
+  previous `document.pdf` sat there while the current one failed, and checking only
+  `pdf.exists()` served last week's document as the current graph.
+- **`max_print_line` is raised.** pdflatex wraps its log at 79 columns mid-token,
+  which silently broke every pattern here: nine undefined references reported four.
+- **`-no-shell-escape`.** Every proof in this document is at least partly
+  model-written, and `\write18` executes on a machine configured for `minted`.
+- **Warnings are reported next to success.** An undefined `\ref`, a duplicate
+  `\label`, an `Overfull \vbox` while the output routine is active (content that
+  fell off the page and is *not in the PDF*), and LaTeX asking for another pass.
+
+### Ordering in the LaTeX preamble is load-bearing
+
+`bp/templates/document.tex.j2` injects the user's `preamble.tex` **after** the
+option-free base packages and **before** everything with options or any
+`\newtheorem`. All three positions matter:
+
+- base packages first, so a user's `\DeclareMathOperator` has `amsmath`;
+- the user's preamble next, so their `\newtheorem{lemma}` and their
+  `\usepackage[hidelinks]{hyperref}` simply win;
+- ours last, via `\PassOptionsToPackage` and `\@ifundefined` guards, so a package
+  they already loaded cannot clash and an environment they already defined is left
+  alone.
+
+Before this, a mathematician pasting in their paper's preamble got "Command \lemma
+already defined" and no PDF on the first try.
+
+The status macros are `\long\def`, and set colour with a *switch* rather than
+`\textcolor{...}{#3}`: they take model-written free text, a short argument may not
+contain a blank line, and a verifier writing two paragraphs is not a rare event.
+
+---
+
+## 6c. Citations: the failure that motivated the third worklist
+
+A target theorem's statement read *"let $\omega_0$ be as in Section
+\ref{sec-space}"*. That section was never written. What then happened is the most
+instructive failure in this project's history, because **four separate layers each
+had the information to catch it and none did**:
+
+1. **Nothing examined the target when it was provided.** There was no check on the
+   root statement at all — not its self-containedness, not its consistency, not its
+   completeness. The statement of the thing the whole project is about had never
+   been read by any part of the system.
+2. **The decomposer split it into seven children**, every one of which inherited the
+   phrase — and therefore inherited a hypothesis set that was nowhere stated. It was
+   never shown what its own node cited.
+3. **The verifier passed the children's proofs.** It was reading text containing a
+   reference to nothing and had no reason to treat that as a gap.
+4. **LaTeX only warned**, and printed `??`.
+
+They failed for one reason, and it is this codebase's recurring lesson in a new
+costume: **nobody enumerated the references.** `DIS011` works because code iterates
+another node's `hypotheses`; `LED001` works because code iterates an extracted
+ledger. Citations had no such list, so no layer could be asked a complete question
+about them, and each layer's silence looked like assent.
+
+There are now four answers, one per layer.
+
+### Layer 1 — the target is examined (`TGT001`, `TGT002`)
+
+`audited_against` records the statement hash at the last statement audit, written
+only by `ops.record_audit`. Its *absence* is the point:
+
+| Code | Sev | Says |
+|---|---|---|
+| `TGT001` | warn | The target theorem's statement has never been audited |
+| `TGT002` | warn | It has been audited, but has been edited since |
+
+Warnings, not errors, because the auditor's *findings* are prompts for attention
+rather than checks (`DECISIONS.md` D049) and blocking on a weak check trains the
+user to override it. But the *absence of any examination at all* is now a fact the
+system states rather than one the user has to remember.
+
+Target-only. Most nodes are never audited — the auditor runs at `deep` — and firing
+on all of them would be noise, which is how a check earns being ignored.
+
+### Layer 2 — expansion refuses an incoherent statement
+
+`bp expand` runs `statement_errors` on the node first: the `xref` and `latex`
+families over that node's own words, nothing else. Any error and it refuses, naming
+the codes, before spending a call. `--force` overrides, because the user may be
+mid-edit and know better.
+
+This is the cheapest place in the system to catch an incoherent statement and it
+used to be the place that ignored it. The decomposer also now gets
+`context.xref_block`, so it is *told* what its node cites and whether those
+citations resolve.
+
+### Layer 3 — the verifier cannot pass it
+
+`xref` is a family in the verification record, so `XRF001` makes
+`deterministic.xref = fail`, and `implied_status` derives `flagged`. This holds at
+`quick`, with both panel members saying "no objection": a node whose text cites
+nothing cannot be recorded as verified, whatever a model thinks of the argument.
+
+### Layer 4 — citations are obligations
+
+The third worklist, alongside discharges and ledger claims.
+`xref.reference_obligations_for` emits one record per **cross-node** citation that
+**resolves** — a dangling one is already decided by `XRF001`, and sending it to a
+model would invite the model to imagine what it might have pointed at.
+
+Each record carries the *citing passage* as well as the cited text, because the
+question is not "does equation (3) exist" (code answered that) but "does equation
+(3) give what this sentence draws from it". Answered by the `obligation` role at
+`--level standard` — a citation is as load-bearing as a hypothesis, so it belongs
+with the discharge obligations rather than among the optional extras — cached on a
+content hash like the rest, and it lands in the record as a `references` block that
+`implied_status` refuses to call verified while anything in it is flagged.
+
+`prompts/verify_reference.md` is written around the ways this actually fails: the
+reference is weaker than the use; it is about a different object; **it is a
+definition being used as a theorem**, which asserts nothing and therefore gives
+nothing; it is circular; its own hypotheses are unavailable here.
+
+### What this still does not cover
+
+A citation in *prose* — "by standard elliptic regularity", "by the results of §3" —
+is not a `\ref` and is not enumerated by this module. It reaches the system only if
+the extractor lists it as a ledger claim with a `literature` source, and `LED005`
+warns when such a reference names nothing findable. That path is real but its
+completeness depends on the extractor, which is the ledger's known soft spot (§0).
+
+---
+
 ## 7. The other checks
 
 **Integrity** (`bp/graph.py`) — the graph is not a graph without these.
@@ -659,6 +909,19 @@ dependency that carries no weight. The match is by whole token, so a node called
 as a diagnostic rather than a traceback, so one bad file does not hide the state
 of the other forty), `SCH002` (unknown frontmatter key), `SCH003` (marked
 verified with no proof and no children — probably meant `assumption`).
+
+**Authored LaTeX** (`bp/checks.py:latex_text`) — the two ways LaTeX in a body goes
+wrong *silently*, since the renderer passes authored text through rather than
+escaping it.
+
+| Code | Sev | Catches |
+|---|---|---|
+| `TEX001` | warn | A mid-line `%`. LaTeX comments out the rest of the line, so text disappears from a PDF that compiled cleanly. A line-initial `%` is a deliberate comment and is not reported — the prover writes `% GAP:` lines. |
+| `TEX002` | error | An odd number of unescaped `$`. The document will not compile, and in the browser the scanner pairs the stray one with the next and typesets prose as mathematics. |
+
+These two and no more, deliberately. Everything else — an unclosed `\begin{align}`,
+an unbalanced brace — fails *loudly* at `pdflatex`, and `bp/compile.py` explains it
+there. These two are the ones that fail quietly.
 
 **Drift** — `SYS001`, the computed fields in a file disagree with a fresh sweep.
 
@@ -795,11 +1058,13 @@ In v0 this is a testing scaffold. The intended daily interface is the L2 web UI.
 | `bp why [id]` | The status chain in plain English |
 | `bp check [--format json] [--quiet]` | Every deterministic check. Exit 1 on error |
 | `bp obligations [id] [--kind discharge\|claim\|all]` | The worklists as JSON: one record per discharge and per sourced claim |
-| `bp render [--clean] [--audit] [--title T] [-o F] [--stdout]` | The LaTeX document |
+| `bp render [--clean] [--audit] [--pdf] [--title T] [-o F] [--stdout]` | The LaTeX document; `--pdf` compiles it and classifies any failure |
+| `bp labels` | Every `\label`, every reference to it, and every reference to nothing |
 | `bp events [--limit N]` | The event log, human-readable |
 | `bp sweep` | Re-derive and write the computed fields |
 | `bp admit <id> -r "…"` / `bp assume <id> -r "…"` | Mark, with a required reason |
-| `bp note <id> "…"` / `bp relabel <id> <difficulty>` / `bp archive <id>` | |
+| `bp note <id> "…"` / `bp relabel <id> <difficulty>` | |
+| `bp archive <id>` / `bp unarchive <id>` | Never deletes; `lifecycle` changes. Restoring does not re-create the citations archiving stripped |
 
 **The agent layer** — these call models, and can fail for reasons the ones above
 cannot: a missing credential, a budget cap, a model that would not answer.
@@ -1396,6 +1661,10 @@ locking row in `UPGRADE.md`, and L2 is what makes it easy to hit.
 |---|---|
 | `POST /api/jobs/{expand,redo,check-decomp,extract,audit,verify,prove}/{id}` | returns a job id; `expand` takes `force` to overrule a decline, `verify` takes `level` and `batch` |
 | `GET /api/recompile/plan?level=L` | the dry run, priced; synchronous, since it makes no calls |
+| `GET /api/labels` | the cross-reference index, with numbers when a current build has them |
+| `GET /api/archived` / `POST /api/node/{id}/unarchive` | what is out of the graph, and the way back |
+| `GET /api/render/compile` | compile and report, without returning the file — so the browser can show a failure in place |
+| `GET /api/render.pdf?built=1` | serve the artifact the probe just built, inline, without recompiling |
 | `POST /api/jobs/{recompile,resume}` | returns a job id; `recompile` takes `level` and `batch` |
 | `GET /api/jobs[/{id}]` | status, step, call count, result |
 

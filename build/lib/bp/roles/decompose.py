@@ -158,6 +158,54 @@ class ExpandResult:
         return self.decomposition.assessment if self.decomposition else ""
 
 
+def statement_errors(graph: Graph, node: Node) -> list[Diagnostic]:
+    """Deterministic errors in this node's *own* statement text.
+
+    Only the families that describe the node's own words — a citation to nothing, a
+    duplicated label, an unclosed dollar. Not the discharge or ledger families, which
+    are about the decomposition that does not exist yet.
+    """
+    from .. import checks
+    from .. import xref as xref_mod
+
+    out = [d for d in xref_mod.check_xref(graph) if d.node == node.id]
+    out.extend(checks.latex_text(node))
+    return [d for d in out if d.severity == "error"]
+
+
+def _refuse_incoherent(graph: Graph, node: Node, *, force: bool) -> None:
+    """Do not build a decomposition on a statement that does not hold together.
+
+    This is the cheapest place in the system to catch an incoherent statement, and it
+    used to be the place that ignored it. A target citing a section nobody had written
+    was decomposed into seven children, every one of which inherited the phrase; the
+    checker did not ask about it, the verifier passed the proofs, and the cost of
+    finding it later was the whole subtree.
+
+    ``force`` overrides, because the user may be mid-edit and know better — but it is
+    an override, not a default.
+    """
+    problems = statement_errors(graph, node)
+    if not problems or force:
+        return
+    lines = [
+        f"{node.id}'s own statement has {len(problems)} deterministic error(s), so "
+        "decomposing it would build a whole subtree on text that does not hold "
+        "together:",
+        "",
+    ]
+    for d in problems:
+        lines.append(f"  {d.code}: {d.message}")
+        if d.hint:
+            lines.append(f"      {d.hint}")
+    lines.append("")
+    lines.append(
+        "Fix the statement first — `bp check` lists these — or pass --force if you "
+        "know better. Every child inherits whatever is wrong here."
+    )
+    raise ops.OpError("\n".join(lines))
+
+
 # --- prompt assembly ----------------------------------------------------------
 
 
@@ -179,6 +227,10 @@ def build_prompt(
         context.preamble_block(project) if project is not None else "",
         context.setting(graph, node),
         context.node_block(node, heading="The node to decompose"),
+        # What this node's own text cites, and whether those citations resolve. The
+        # decomposer had none of this, which is how a statement citing a section
+        # nobody had written was split into seven children that all inherited it.
+        context.xref_block(graph, node),
         context.siblings_available(graph, node),
     ]
     if hint:
@@ -340,6 +392,7 @@ def expand(
             f"{node_id} already has children ({', '.join(node.children)}). "
             "Use `bp redo` to archive them and decompose again."
         )
+    _refuse_incoherent(graph, node, force=force)
 
     user = build_prompt(graph, node, hint, project, force)
     calls: list[CallMeta] = []
@@ -592,6 +645,7 @@ def summarise(result: ExpandResult) -> str:
 
 __all__ = [
     "Decomposition",
+    "statement_errors",
     "ExpandResult",
     "HypothesisSpec",
     "ProposedChild",

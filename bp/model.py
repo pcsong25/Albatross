@@ -40,7 +40,9 @@ COMPUTED_FIELDS = frozenset(
 #: keeping them here documents that they are still not hand-edited fields — and
 #: in particular that no role may set ``local_status``, which is *derived* from
 #: ``verification`` by :mod:`bp.verification`.
-VERIFICATION_FIELDS = frozenset({"verified_against", "verification"})
+VERIFICATION_FIELDS = frozenset(
+    {"verified_against", "verification", "audited_against"}
+)
 
 #: The claim ledger. Produced by the extractor role, audited deterministically by
 #: :mod:`bp.ledger`, and written only by :func:`bp.ops.record_ledger`. It is a
@@ -261,6 +263,10 @@ class VerificationRecord(BaseModel):
     ledger: dict[str, int] = Field(default_factory=dict)
     #: ``{total, verified, flagged, cached}``
     obligations: dict[str, int] = Field(default_factory=dict)
+    #: ``{total, verified, flagged, cached}`` over cross-node citations. A citation
+    #: is as load-bearing as a hypothesis: the failure that motivated this block was
+    #: a statement citing a section nobody had written.
+    references: dict[str, int] = Field(default_factory=dict)
     #: panel role -> ``no_objection`` | ``objection_confirmed`` |
     #: ``objection_withdrawn`` | ``did_not_answer``
     whole_proof: dict[str, str] = Field(default_factory=dict)
@@ -284,6 +290,10 @@ class VerificationRecord(BaseModel):
     @property
     def flagged_claims(self) -> int:
         return int(self.ledger.get("flagged", 0))
+
+    @property
+    def flagged_references(self) -> int:
+        return int(self.references.get("flagged", 0))
 
     @property
     def confirmed_objections(self) -> int:
@@ -338,6 +348,11 @@ class Node(BaseModel):
     blocked_by: list[str] = Field(default_factory=list)
     statement_hash: str | None = None
     verified_against: dict[str, str] = Field(default_factory=dict)
+    #: The statement hash at the last statement audit, written by
+    #: :func:`bp.ops.record_audit`. Its *absence* is the point: a statement nobody
+    #: has examined is the hole this closes, and the target theorem was the node it
+    #: mattered for most — nothing ever looked at it.
+    audited_against: str | None = None
     #: The claim ledger, and the hash of the proof text it was extracted from.
     #: When they disagree the ledger describes an earlier proof, which is
     #: ``LED100``.
@@ -365,7 +380,10 @@ class Node(BaseModel):
             )
         return v
 
-    @field_validator("statement_hash", "verified_against", "claims_of", mode="before")
+    @field_validator(
+        "statement_hash", "verified_against", "claims_of", "audited_against",
+        mode="before",
+    )
     @classmethod
     def _hashes_are_strings(cls, v: Any) -> Any:
         """Keep hashes textual.

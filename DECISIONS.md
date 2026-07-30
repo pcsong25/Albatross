@@ -1034,3 +1034,181 @@ forbidding.
 The same reasoning is why `ADMITTED` discharges are not sent either. In both cases
 the author has already said the thing is unsourced; there is nothing to check, and
 the sweep already carries it as visible debt.
+
+---
+
+## D051 — Cross-references are a derived index, and out-of-scope ones warn
+
+**Date** 2026-07-30 · **Milestone** L3 (friction log)
+
+Reported: `\label`/`\ref` "do not work"; a child's hypotheses say
+"Section \ref{sec-space}" and nobody knows what that is; *"we may need to maintain
+a live and unified latex file which records everything on the graph to enable
+cross-references."*
+
+**The premise was wrong in an encouraging direction.** References already worked —
+every node renders into one document and pdflatex runs twice, verified by reading
+the `.aux`. What was missing was every guarantee around them, and all of it silent:
+a dangling reference is a LaTeX *warning* that prints `??`; a duplicated label is a
+warning that resolves to one of them at random; the browser rendered `\eqref` as
+literal garbage with no error node; and a reference was a dependency the graph did
+not record.
+
+**Decision: a derived index, never a stored file.** `bp/xref.py` recomputes labels
+and references from the node bodies on every load, exactly as `Graph` does, and
+stores nothing. A live unified `.tex` is forbidden by non-negotiable 2 and is also
+unnecessary, since the renderer already emits one unified document. Memoised per
+`Graph` because staleness is asked once per node inside the sweep.
+
+**Decision: `XRF001`/`XRF002` error, `XRF003`/`XRF004` warn.** The rule this
+codebase runs on is that an error is for something silently *wrong* and a warning
+for something legal that is almost always a mistake. A dangling or duplicated
+reference produces a wrong document; an out-of-scope one produces a correct document
+with poor structure. A check that blocks on structure gets overruled by habit until
+nobody reads the family.
+
+**Alternatives.** Three independent designs were commissioned, and all three landed
+on the derived index and on substituting before KaTeX — so that part is not a
+judgement call. **Two of the three made a child referencing its parent a hard
+error.** Their strongest argument was a staleness hole (see D052), which is now
+closed; the remaining costs are that the document reads dependencies-first so the
+reference points forward, and that the verifier reads the child with no parent
+context. Both are real, both are reasons to hoist, neither makes the reference
+wrong. A third design proposed a declared `exports`/`imports` table checked the way
+`uses` is; rejected for v0 because its completeness guarantee is *weaker* than
+`DIS011`'s — the demand set would come from the importing node's own prose rather
+than from another node's declaration — so it buys ceremony without buying the
+property that makes `uses` worth having.
+
+**To reverse.** Promote `XRF003` to an error and provide a `bp hoist` command, or
+the rule will be resented.
+
+---
+
+## D052 — A cross-reference invalidates a verification
+
+**Date** 2026-07-30 · **Milestone** L3 (friction log)
+
+Found by the adversarial review of D051, not by me.
+
+`verified_against` held `self` plus each child's statement hash. A node whose
+statement said `\eqref{eq:riccati}`, with the equation defined in another node, had
+no key for that node — so editing the equation left the referring node **verified**
+while the text it leans on moved underneath it.
+
+**Decision.** The certificate carries an `xref:<id>` key per cross-referenced node
+and `is_stale` checks them. The prefix is namespaced so a certificate written before
+this is not misread as stale.
+
+**Why this is not a matter of taste.** `bp/hash.py` hashes raw text with no
+normalisation, and its docstring says why: over-invalidation is annoying,
+under-invalidation lets a verification certificate outlive the claim it certified,
+and that is the one direction the module exists to rule out. A reference that
+escaped staleness was a hole in the only guarantee it makes.
+
+**To reverse.** Nothing sensible. If the cost of over-invalidation becomes real,
+normalise the hash (`UPGRADE.md`) rather than narrowing what it covers.
+
+---
+
+## D053 — A document is rendered from a complete graph or not at all
+
+**Date** 2026-07-30 · **Milestone** L3 (friction log)
+
+A node file with one YAML typo used to be reported to stderr and then **skipped**.
+The parent then had one fewer child, the sweep found nothing unfinished beneath it,
+and `bp render` produced a document headed *"top is proved. It rests on no admitted
+step, no assumption and no unfinished lemma."* — with the missing lemma nowhere in
+the document, and exit code 0.
+
+**Decision.** `cli._graph` refuses on any error-severity load diagnostic, the same
+call the loader already made for a cycle. `bp check` still reports rather than
+refusing, because it is the diagnostic tool.
+
+**Alternatives.** (a) Render anyway with a warning block stamped into the document.
+Rejected: it needs the caller to thread diagnostics into the renderer, and a
+document that is *mostly* right is exactly the artifact this system exists not to
+produce. (b) Status quo. Rejected on sight.
+
+**Cost.** One broken file blocks every derived command until it is fixed. That is
+the intended trade: the error message names the file and the YAML error.
+
+---
+
+## D054 — Two authored-LaTeX checks, and only two
+
+**Date** 2026-07-30 · **Milestone** L3 (friction log)
+
+An audit catalogued a dozen ways authored LaTeX breaks. Most fail *loudly* at
+`pdflatex`, where `bp/compile.py` now explains them. Two fail quietly.
+
+**Decision.** `TEX001` (warn) for a `%` that is not at the start of a line, which
+deletes the rest of that line from a PDF that compiles cleanly. `TEX002` (error) for
+an odd number of unescaped `$`. Nothing else.
+
+**Why not escape the `%` instead.** `render.prose` defuses `%` and is documented as
+applying to bodies — it does not, and it must not: the prover writes `% GAP:`
+comments into proofs, and escaping them would turn a marker of an unjustified step
+into visible text claiming to be part of the proof.
+
+**Why not a general LaTeX validator.** Brace and environment balance, `&` outside a
+table, `\item` outside a list — each is a real failure and each is *loud*. A
+check that duplicates pdflatex is a check that will disagree with pdflatex.
+`UPGRADE.md` carries the row.
+
+---
+
+## D055 — Citations are the third worklist, and the target is examined before it is built on
+
+**Date** 2026-07-30 · **Milestone** L3 (friction log)
+
+The user traced `Section \ref{sec-space}` to its origin: it was in the **statement of
+the target theorem**, referring to a section never provided. Their diagnosis, which
+is correct: *"the self-containedness, consistency and completeness of the target
+theorem is never examined… at later expansion none of the children found this issue…
+the verifier even passed the local proof. There is a logic hole under the whole
+system."*
+
+Four layers each had the information and none acted. They failed for one reason —
+**nobody enumerated the references** — which is `DIS011`'s and `LED001`'s lesson
+arriving a third time.
+
+**Decision: four answers, one per layer.**
+
+1. `TGT001`/`TGT002` (warn) — the target's statement has never been audited, or was
+   audited against different words. Backed by `audited_against`, a statement-hash
+   certificate written only by `ops.record_audit`.
+2. `bp expand` refuses a node whose own statement carries `xref` or `latex` errors,
+   before spending a call. The decomposer is also given
+   `context.xref_block`, so it is told what its node cites.
+3. `xref` is a deterministic family in the verification record, so `XRF001` derives
+   `flagged` even at `quick` with both verifiers saying "no objection".
+4. `xref.reference_obligations_for` emits one record per resolving cross-node
+   citation, checked by the `obligation` role at `standard`, cached on a content
+   hash, and refused by `implied_status` while any is flagged.
+
+**Why the target check warns rather than errors.** The auditor's findings are prompts
+for attention, not checks (D049), and a weak check that blocks gets overruled by
+habit. What is *not* soft is the expansion gate: an incoherent statement being built
+upon is a hard refusal, because everything downstream inherits it.
+
+**Why citations run at `standard`, not `deep`.** A citation is as load-bearing as a
+hypothesis. `Section \ref{sec-space}` was where the target's hypotheses were supposed
+to come from, so a level that checks every discharge and skips every citation checks
+the wrong half.
+
+**Why a dangling citation produces no obligation record.** `XRF001` has already
+decided it deterministically. Sending it to a model would invite the model to imagine
+what it might have pointed at — the same reasoning as for unsourced ledger claims
+(D050) and `ADMITTED` discharges.
+
+**Alternatives.** (a) Make `XRF001` block `bp expand` only, leaving the verifier
+alone. Rejected: the verifier passing a proof whose text cites nothing was half the
+reported failure. (b) Add a fifth question to the statement auditor instead of a
+worklist. Rejected: an auditor answer is a judgement with no completeness guarantee,
+and the entire point is that the citations are now *enumerated*.
+
+**What is still not covered**, stated plainly: a citation in prose — "by standard
+elliptic regularity" — is not a `\ref` and is not enumerated here. It reaches the
+system only via the extractor's ledger, which is the ledger's known soft spot.
+`UPGRADE.md` carries the row.

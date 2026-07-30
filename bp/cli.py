@@ -24,6 +24,7 @@ from . import checks, events as events_mod, frontier as frontier_mod, ops
 from . import render as render_mod, verification as verification_mod, why as why_mod
 from .discharge import all_obligations, obligations_for
 from .ledger import all_claim_obligations, claim_obligations_for
+from .xref import all_reference_obligations, reference_obligations_for
 from .graph import GraphError
 from .paths import ProjectNotFound, find_project
 from .propagate import (
@@ -322,10 +323,12 @@ def obligations(
     node_id: Optional[str] = typer.Argument(None, help="node id (default: all)"),
     root: Optional[Path] = typer.Option(None, "--root"),
     kind: str = typer.Option(
-        "all", "--kind", help="all | discharge | claim — which worklist to emit"
+        "all",
+        "--kind",
+        help="all | discharge | claim | reference — which worklist to emit",
     ),
 ) -> None:
-    """Emit the worklists: one record per discharge and per sourced ledger claim.
+    """Emit the worklists: one record per discharge, sourced claim, and citation.
 
     This is what the verifier consumes, and it is generated here — deterministically
     — so that a clean verdict means *all N enumerated checks passed* rather than
@@ -333,14 +336,16 @@ def obligations(
     verifier's cache is keyed on.
     """
     project, graph = _graph(root)
-    if kind not in {"all", "discharge", "claim"}:
+    if kind not in {"all", "discharge", "claim", "reference"}:
         err_console.print(
-            f"[bold red]error[/] unknown kind {kind!r}; use all, discharge or claim"
+            f"[bold red]error[/] unknown kind {kind!r}; use all, discharge, claim "
+            "or reference"
         )
         raise typer.Exit(code=2)
     if node_id is None:
         discharge_records = all_obligations(graph)
         claim_records = all_claim_obligations(graph)
+        reference_records = all_reference_obligations(graph)
     else:
         node = graph.get(node_id)
         if node is None:
@@ -348,11 +353,14 @@ def obligations(
             raise typer.Exit(code=2)
         discharge_records = obligations_for(node, graph)
         claim_records = claim_obligations_for(node, graph)
+        reference_records = reference_obligations_for(node, graph)
     records = []
     if kind in {"all", "discharge"}:
         records.extend(discharge_records)
     if kind in {"all", "claim"}:
         records.extend(claim_records)
+    if kind in {"all", "reference"}:
+        records.extend(reference_records)
     sys.stdout.write(json.dumps(records, indent=2, ensure_ascii=False) + "\n")
 
 
