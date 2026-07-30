@@ -74,6 +74,14 @@ For every hypothesis of every child you cite, name where it comes from. One of:
 | `literature:<reference>` | taken from the literature; name it |
 | `ADMITTED: <reason>` | not available, and you are proceeding anyway |
 
+The `proof:`, `literature:` and `ADMITTED:` forms take **free text, which is
+prose**, not a math fragment. Any mathematics inside them needs its own dollar
+signs: `proof:$s > 3/2$ gives $f \in C^1$ by Sobolev embedding`, not
+`proof:s > 3/2 gives f \in C^1 by Sobolev embedding`. The second one is typeset
+into the rendered document as text and breaks the build. (`applied_to` and a
+hypothesis's `tex` are the opposite: those are fragments and the renderer supplies
+the dollars.)
+
 **If you cannot source a hypothesis, write `ADMITTED: <reason>`. Do not omit the
 entry.** An omitted entry is a hidden gap; an `ADMITTED` entry is visible debt
 the user can act on. For example, if child `elb-b` needs an a priori $L^\infty$

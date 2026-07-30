@@ -1,11 +1,19 @@
 """Role → backend resolution, read from ``bp.yaml``.
 
-The system talks about *roles* — decomposer, checker, verifier_a, verifier_b,
-prover — and never about models. Which model plays which role is one edit to one
-file. That indirection is worth keeping even though it costs a layer: it is what
-lets a user move the expensive verifier onto a subscription CLI when the bill
-gets uncomfortable, or put the two verifiers on different families so the panel
-is worth having, without touching a line of Python.
+The system talks about *roles* — decomposer, checker, extractor, obligation,
+verifier_a, verifier_b, confirmer, auditor, prover — and never about models. Which
+model plays which role is one edit to one file. That indirection is worth keeping
+even though it costs a layer: it is what lets a user move the expensive verifier
+onto a subscription CLI when the bill gets uncomfortable, or put the two verifiers
+on different families so the panel is worth having, without touching a line of
+Python.
+
+It is also how **model tiering** happens, which is the difference between a
+recompile you can afford and one you cannot. Extraction is translation and belongs
+on the cheap model; the narrow entailment checks — obligations and claims, the bulk
+of the calls — belong on a mid model; the whole-proof pass and the confirmation
+pass belong on the strongest one available. The defaults below say that, and
+``bp.yaml`` overrides any of it.
 
 Prices are configuration too. They are needed for ``--dry-run`` estimates and
 for the budget cap, they change, and hardcoding them would make the estimate
@@ -39,7 +47,21 @@ BACKENDS: dict[str, type[Backend]] = {
     ScriptedBackend.name: ScriptedBackend,
 }
 
-ROLES = ("decomposer", "checker", "verifier_a", "verifier_b", "prover")
+#: Every role the system asks for by name. ``obligation`` answers both narrow
+#: entailment jobs — a discharge obligation and a ledger claim are the same shape
+#: of question and want the same tier of model — so there is one role rather than
+#: two knobs that would always be set alike.
+ROLES = (
+    "decomposer",
+    "checker",
+    "extractor",
+    "obligation",
+    "verifier_a",
+    "verifier_b",
+    "confirmer",
+    "auditor",
+    "prover",
+)
 
 #: Published list prices, US dollars per million tokens. Overridable in
 #: ``bp.yaml`` under ``pricing:``. Used for the ``--dry-run`` estimate and the
@@ -53,11 +75,18 @@ DEFAULT_PRICING: dict[str, dict[str, float]] = {
     "claude-haiku-4-5": {"input_usd_per_mtok": 1.0, "output_usd_per_mtok": 5.0},
 }
 
+#: The tiering, as defaults. Cheap model for translation, mid model for the narrow
+#: entailment checks that make up most of the calls, strongest model for the two
+#: jobs that need a whole argument in view.
 DEFAULT_ROLES: dict[str, dict[str, Any]] = {
     "decomposer": {"backend": "claude_api", "model": "claude-opus-5"},
     "checker": {"backend": "claude_api", "model": "claude-opus-5"},
+    "extractor": {"backend": "claude_api", "model": "claude-haiku-4-5"},
+    "obligation": {"backend": "claude_api", "model": "claude-sonnet-5"},
     "verifier_a": {"backend": "claude_api", "model": "claude-opus-5"},
     "verifier_b": {"backend": "claude_api", "model": "claude-opus-5"},
+    "confirmer": {"backend": "claude_api", "model": "claude-opus-5"},
+    "auditor": {"backend": "claude_api", "model": "claude-opus-5"},
     "prover": {"backend": "claude_api", "model": "claude-sonnet-5"},
 }
 

@@ -1,4 +1,24 @@
-"""The four agent roles: decompose, check, verify, prove.
+"""The six agent roles: decompose, check, extract, verify, audit, prove.
+
+Every mathematical judgement in this system is made in one of these six modules,
+and every one of them consumes a **deterministically generated worklist** and
+returns a **structured verdict against it**. No role is ever asked an open question
+like "is this proof correct":
+
+* ``decompose`` proposes children, a reduction and a complete discharge table,
+  which :mod:`bp.discharge` then checks for completeness before anything is written;
+* ``check`` asks two fixed questions about a decomposition;
+* ``extract`` translates a proof into an enumerated claim ledger, which
+  :mod:`bp.ledger` audits;
+* ``verify`` runs three separately-cached jobs over the lists that discharge and
+  ledger emit, then a confirmation pass;
+* ``audit`` asks four fixed questions about a statement;
+* ``prove`` writes a proof for an easy leaf and never sets a status.
+
+That is the whole design in one sentence: **agents supply judgement, code supplies
+the guarantee that the judgement was complete.** Whether a claim is true cannot be
+checked deterministically. That every claim was enumerated, assigned a source and
+dispatched to a verifier can be, and is.
 
 Each role is a thin function around one or more model calls. The pattern is the
 same every time and is worth stating once:

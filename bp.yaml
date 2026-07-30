@@ -59,8 +59,37 @@ agents:
                   -c, model_reasoning_effort=xhigh]
       timeout: 2400
 
-    # The verifier panel. See the warning above: these should not be the same
-    # model. Both are on Sol only because that is what was asked for.
+    # --- the tiered half -----------------------------------------------------
+    #
+    # Reads a proof and lists every load-bearing claim with the source the prose
+    # offers. This is TRANSLATION, not judgement, which is why it is the cheap
+    # model and why its output is trustworthy enough to be a computed field. On a
+    # subscription the tier costs time rather than money, so it runs at `low`.
+    extractor:
+      backend: codex_cli
+      model: gpt-5.6-sol
+      options:
+        command: [codex, exec, --skip-git-repo-check,
+                  --model, gpt-5.6-sol,
+                  -c, model_reasoning_effort=low]
+      timeout: 900
+
+    # The narrow entailment checks: does this source give this hypothesis, and
+    # does this source justify this claim. These are most of the calls a deep
+    # recompile makes — a ten-claim proof is roughly fifteen calls — so this is
+    # the role to move if a recompile is taking too long.
+    obligation:
+      backend: codex_cli
+      model: gpt-5.6-sol
+      options:
+        command: [codex, exec, --skip-git-repo-check,
+                  --model, gpt-5.6-sol,
+                  -c, model_reasoning_effort=medium]
+      timeout: 1800
+
+    # The verifier panel: the whole-proof pass. See the warning above — these
+    # should not be the same model. Both are on Sol only because that is what was
+    # asked for.
     verifier_a:
       backend: codex_cli
       model: gpt-5.6-sol
@@ -70,6 +99,30 @@ agents:
                   -c, model_reasoning_effort=xhigh]
       timeout: 2400
     verifier_b:
+      backend: codex_cli
+      model: gpt-5.6-sol
+      options:
+        command: [codex, exec, --skip-git-repo-check,
+                  --model, gpt-5.6-sol,
+                  -c, model_reasoning_effort=xhigh]
+      timeout: 2400
+
+    # Re-reads every objection with its surrounding context and drops the ones
+    # that dissolve. Do not economise here: without it the objection list is
+    # mostly pedantry, you stop reading it, and the one real finding goes too.
+    confirmer:
+      backend: codex_cli
+      model: gpt-5.6-sol
+      options:
+        command: [codex, exec, --skip-git-repo-check,
+                  --model, gpt-5.6-sol,
+                  -c, model_reasoning_effort=xhigh]
+      timeout: 2400
+
+    # Four questions about a statement, with no proof in view: well-posedness, a
+    # vacuity witness, quantifier order, and whether a constant depends on
+    # something it is treated as uniform in. Runs at `--level deep` only.
+    auditor:
       backend: codex_cli
       model: gpt-5.6-sol
       options:
@@ -92,7 +145,12 @@ budget:
   # A run stops before the call that would cross either cap. The dollar cap only
   # constrains calls whose price is known; a subscription CLI reports no price,
   # so with this configuration the CALL CAP is the only thing limiting a run.
-  # Keep it set — at `max` effort, forty calls is a long afternoon.
+  #
+  # Agent-checking every claim is expensive: a node with a ten-claim proof runs
+  # roughly fifteen calls at `--level deep`, so a thirty-node graph is several
+  # hundred. `bp recompile --dry-run --level deep` prints the bill before you pay
+  # it, and `--level` is the knob that actually controls cost. Keep the call cap
+  # set — at `max` effort, forty calls is a long afternoon.
   per_recompile_usd: 3.0
   max_calls_per_recompile: 40
 
