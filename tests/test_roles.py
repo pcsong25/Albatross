@@ -1139,3 +1139,62 @@ class TestBatching:
         report = verify_role.verify_obligations(project, "t", registry=registry, batch=3)
         assert len(report.flags) == 2
         assert all("--batch 1" in f.why for f in report.flags)
+
+
+class TestCrossReferenceContext:
+    """A model shown `\\eqref{eq:main}` and nothing else will invent a meaning for
+    it and then reason confidently from the invention. Where a reference points is a
+    deterministic fact, so it is supplied rather than guessed."""
+
+    def _pair(self, project):
+        write_node(
+            project, "t", target=True, children=["c"],
+            proof="By `c` and \\eqref{eq:child} we are done, cf. \\ref{sec-ghost}.",
+            uses={"c": {"applied_to": "x", "discharges": {}}},
+        )
+        write_node(
+            project, "c",
+            statement="\\begin{equation}\\label{eq:child} x = y \\end{equation}",
+        )
+
+    def test_the_verifier_is_told_what_a_reference_points_at(self, project):
+        self._pair(project)
+        seen: list[str] = []
+        registry = scripted_registry(
+            project,
+            verifier_a=[json_reply({"checked": ["x"], "objections": []})],
+            verifier_b=[json_reply({"checked": ["y"], "objections": []})],
+        )
+        for role in ("verifier_a", "verifier_b"):
+            agent = registry.agent(role)
+            original = agent.invoke
+            agent.invoke = (  # type: ignore[method-assign]
+                lambda s, u, t, _o=original: (seen.append(u), _o(s, u, t))[1]
+            )
+        verify_role.verify(project, "t", registry=registry, level="quick")
+        assert seen
+        assert all("eq:child" in prompt for prompt in seen)
+        assert all("`c`" in prompt for prompt in seen)
+        # And a reference to nothing is named as a gap rather than left to be
+        # imagined.
+        assert all("refers to nothing that exists" in prompt for prompt in seen)
+
+    def test_the_extractor_gets_the_same_context(self, project):
+        self._prepare_extract(project)
+        seen: list[str] = []
+        registry = scripted_registry(project, extractor=[json_reply({"claims": []})])
+        agent = registry.agent("extractor")
+        original = agent.invoke
+        agent.invoke = (  # type: ignore[method-assign]
+            lambda s, u, t, _o=original: (seen.append(u), _o(s, u, t))[1]
+        )
+        extract_role.extract(project, "t", registry=registry)
+        assert seen and "eq:child" in seen[0]
+
+    def _prepare_extract(self, project):
+        self._pair(project)
+
+    def test_a_node_with_no_references_gets_no_block(self, project):
+        write_node(project, "t", target=True, proof="A plain argument.", statement="S.")
+        graph = graph_of(project)
+        assert context_mod.xref_block(graph, graph["t"]) == ""

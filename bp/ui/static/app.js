@@ -27,6 +27,7 @@ const state = {
   busy: new Set(),
   editing: null,          // 'statement' | 'proof' | null
   macros: {},             // parsed from preamble.tex, handed to KaTeX
+  labels: {},             // label -> {node, section, number}: the xref index
   cy: null,
 };
 
@@ -175,6 +176,17 @@ async function loadMacros() {
   } catch (e) { state.macros = {}; }
 }
 
+/** The cross-reference index, so `\\eqref` can be resolved before KaTeX sees it.
+ *
+ * Refreshed with the graph, because editing a statement can add or remove a label.
+ * A failure here degrades display only: references fall back to showing the label
+ * name, which is still better than the literal `\\eqrefeq:m` KaTeX produces. */
+async function loadLabels() {
+  try {
+    state.labels = (await api('/api/labels')).labels || {};
+  } catch (e) { state.labels = {}; }
+}
+
 function renderMath(tex, display) {
   try {
     return katex.renderToString(tex, {
@@ -185,8 +197,72 @@ function renderMath(tex, display) {
   }
 }
 
-/** Prose with node references linked. Everything goes in as text. */
+/* --- LaTeX cross-references ---------------------------------------------------
+ *
+ * KaTeX does not resolve `\ref`, `\eqref` or `\cref`. Worse than failing, it
+ * renders them as literal garbage — `\eqref{eq:m}` comes out as `\eqrefeq:m`
+ * with no error node at all, so `throwOnError: false` never sees it. So they are
+ * pulled out of the text and replaced *before* anything reaches KaTeX.
+ *
+ * A resolved reference shows the number LaTeX assigned (read back from the last
+ * compile's .aux — predicting it here would mean reimplementing LaTeX's counters)
+ * and links to the node that defines it. An unresolved one is shown as broken,
+ * because that is what it is: XRF001, and `??` in the PDF.
+ */
+const XREF_RE = new RegExp(
+  '\\\\(ref|eqref|cref|Cref|cpageref|autoref|nameref|pageref|vref)\\s*\\{([^}]*)\\}',
+  'g',
+);
+
+/** Replace one reference with a chip saying where it points. */
+function xrefChip(command, name) {
+  const known = state.labels && state.labels[name];
+  if (!known) {
+    return el('span', {
+      class: 'xref broken',
+      title: `\\${command}{${name}} — no node defines this label. The PDF prints ?? here (XRF001).`,
+    }, `[?${name}]`);
+  }
+  // `\eqref` conventionally parenthesises; the others do not.
+  const number = known.number
+    ? (command === 'eqref' ? `(${known.number})` : known.number)
+    : name;
+  const chip = el('a', {
+    class: 'xref' + (known.duplicate ? ' broken' : ''),
+    title: known.duplicate
+      ? `\\${command}{${name}} — defined in more than one node, so this may point at the wrong thing (XRF002).`
+      : `\\${command}{${name}} — defined in the ${known.section} of ${known.node}`
+        + (known.number ? '' : '. Build the PDF once to see its number.'),
+    onclick: () => select(known.node),
+  }, number);
+  return chip;
+}
+
+/** Prose with node references and LaTeX cross-references linked.
+ *
+ * Everything goes in as text; the only markup anywhere in this file comes from
+ * KaTeX. */
 function proseWithRefs(text, into) {
+  // Cross-references first: they are unambiguous and must not be handed to KaTeX.
+  let cursor = 0;
+  XREF_RE.lastIndex = 0;
+  let xm;
+  const chunks = [];
+  while ((xm = XREF_RE.exec(text)) !== null) {
+    if (xm.index > cursor) chunks.push({ text: text.slice(cursor, xm.index) });
+    chunks.push({ chip: xrefChip(xm[1], xm[2].trim()) });
+    cursor = xm.index + xm[0].length;
+  }
+  if (cursor < text.length) chunks.push({ text: text.slice(cursor) });
+
+  for (const chunk of chunks) {
+    if (chunk.chip) { into.append(chunk.chip); continue; }
+    nodeRefsInto(chunk.text, into);
+  }
+}
+
+/** Backtick-quoted node ids become links to those nodes. */
+function nodeRefsInto(text, into) {
   let last = 0;
   REF_RE.lastIndex = 0;
   let match;
@@ -201,6 +277,31 @@ function proseWithRefs(text, into) {
     last = match.index + match[0].length;
   }
   if (last < text.length) into.append(text.slice(last));
+}
+
+/** Make a math fragment safe for KaTeX, and number it the way the PDF will.
+ *
+ * KaTeX supports neither `\label` nor `\eqref`, and does not number equations at
+ * all — but it does support `\tag`. So a labelled display has its `\label` swapped
+ * for a `\tag` carrying the number LaTeX actually assigned, which is how the
+ * browser comes to show the same equation numbers as the document. Without a
+ * compile there is no number yet, and the label is simply dropped.
+ */
+function sanitiseMath(tex) {
+  const numberOf = (name) => (state.labels && state.labels[name] && state.labels[name].number) || '';
+
+  let out = tex.replace(/\\label\s*\{([^}]*)\}/g, (_, name) => {
+    const n = numberOf(name.trim());
+    return n ? `\\tag{${n}}` : '';
+  });
+
+  out = out.replace(XREF_RE, (_, command, raw) => {
+    const name = raw.trim();
+    const n = numberOf(name);
+    if (!n) return `\\text{[?${name}]}`;
+    return command === 'eqref' ? `\\text{(${n})}` : `\\text{${n}}`;
+  });
+  return out;
 }
 
 /** Render LaTeX prose: text as text, mathematics through KaTeX. */
@@ -219,7 +320,7 @@ function mathProse(text) {
     else if (token.startsWith('\\(')) { tex = token.slice(2, -2); display = false; }
     else if (token.startsWith('\\begin{')) { tex = token; display = true; }  // KaTeX takes the whole env
     else { tex = token.slice(1, -1); display = false; }
-    const html = renderMath(tex, display);
+    const html = renderMath(sanitiseMath(tex), display);
     if (html) frag.append(el('span', { html: html }));
     else frag.append(token);   // as text, not as markup
     last = match.index + token.length;
@@ -401,6 +502,7 @@ function toggleCollapse(id) {
 /* ------------------------------------------------------------- data loading */
 
 async function refresh(keepSelection) {
+  await loadLabels();
   const data = await api('/api/graph');
   data.byId = Object.fromEntries(data.nodes.map((n) => [n.id, n]));
   data.hasParent = {};

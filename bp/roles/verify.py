@@ -513,6 +513,7 @@ def verify_proof(
         context.node_block(node, heading="The claim and its proof"),
         context.children_block(graph, node)
         or "## The lemmas this proof cites\n\nNone — this is a leaf.",
+        context.xref_block(graph, node),
         "The lemmas above are **assumptions**. Do not question whether they are "
         "true; each has its own node and its own verification.",
     )
@@ -809,7 +810,7 @@ def _families_ran(report: VerifyReport) -> list[str]:
     extractor never runs, so the record says ``ledger: not_run`` rather than
     ``pass``, which would be a claim about claims nobody enumerated.
     """
-    families = ["integrity", "children_used", "discharge"]
+    families = ["integrity", "children_used", "discharge", "xref"]
     if report.ledger_ran:
         families.append("ledger")
     return families

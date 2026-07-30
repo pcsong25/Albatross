@@ -171,6 +171,7 @@ def audit(
         # context would let the model read the intended meaning off the argument
         # instead of off the words.
         context.node_block(node, heading="The statement to audit", proof=False),
+        context.xref_block(graph, node),
         context.setting(graph, node),
     )
     result, meta = agent.complete(

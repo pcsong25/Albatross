@@ -2,8 +2,8 @@
 
 Three families live here — the children-used check, a couple of schema-hygiene
 checks, and a drift check — plus the function that assembles all of them with
-integrity (:mod:`bp.graph`), discharge (:mod:`bp.discharge`) and the claim ledger
-(:mod:`bp.ledger`) into one report.
+integrity (:mod:`bp.graph`), discharge (:mod:`bp.discharge`), the claim ledger
+(:mod:`bp.ledger`) and cross-references (:mod:`bp.xref`) into one report.
 
 Checks never mutate anything. They load, derive in memory, and describe.
 """
@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from . import discharge as discharge_mod
 from . import ledger as ledger_mod
+from . import xref as xref_mod
 from .diagnostics import Diagnostic, err, sort_diagnostics, warn
 from .graph import Graph, GraphError
 from .load import computed_in_memory, computed_on_disk, load_nodes
@@ -161,7 +162,7 @@ def load_graph(project: Project) -> tuple[Graph, list[Diagnostic], bool]:
 #: The deterministic check families, in the order the verification record lists
 #: them. Names are part of the record's schema, so they are here rather than
 #: spelled out in :mod:`bp.verification`.
-FAMILIES = ("integrity", "children_used", "discharge", "ledger")
+FAMILIES = ("integrity", "children_used", "discharge", "ledger", "xref")
 
 
 def for_node(graph: Graph, node: Node) -> dict[str, list[Diagnostic]]:
@@ -173,11 +174,16 @@ def for_node(graph: Graph, node: Node) -> dict[str, list[Diagnostic]]:
     to the diagnostics that name this node.
     """
     integrity = [d for d in graph.integrity() if d.node == node.id]
+    # Cross-references are inherently whole-graph — a label and the reference to it
+    # live in different files — so this filters the graph-wide result the same way
+    # integrity is filtered.
+    xref = [d for d in xref_mod.check_xref(graph) if d.node == node.id]
     return {
         "integrity": integrity,
         "children_used": children_used(node),
         "discharge": discharge_mod.check_discharge(node, graph),
         "ledger": ledger_mod.check_ledger(node),
+        "xref": xref,
     }
 
 
@@ -192,6 +198,10 @@ def run(project: Project) -> Report:
         diagnostics.extend(children_used(node))
         diagnostics.extend(discharge_mod.check_discharge(node, graph))
         diagnostics.extend(ledger_mod.check_ledger(node))
+
+    # Whole-graph, after the per-node pass: a reference and its label are in
+    # different files, so neither node alone can tell whether the pair is sound.
+    diagnostics.extend(xref_mod.check_xref(graph))
 
     if swept:
         diagnostics.extend(drift(graph))

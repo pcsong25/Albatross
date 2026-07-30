@@ -28,6 +28,7 @@ from .. import recompile as recompile_mod
 from .. import render as render_mod
 from .. import verification as verification_mod
 from .. import why as why_mod
+from .. import xref as xref_mod
 from ..agents.log import CallLog
 from ..agents.registry import ConfigError, Registry
 from ..discharge import obligations_for
@@ -153,6 +154,14 @@ def node_detail(graph: Graph, node: Node) -> dict[str, Any]:
             }
             for s in node.support
         ],
+        "labels": [
+            {"name": lab.name, "section": lab.section.lower()}
+            for lab in xref_mod.labels_in(node)
+        ],
+        "refs": [
+            {"name": r.name, "command": r.command, "section": r.section.lower()}
+            for r in xref_mod.refs_in(node)
+        ],
         "obligations": obligations_for(node, graph),
         "claim_obligations": ledger_mod.claim_obligations_for(node, graph),
         "claims": [c.model_dump() for c in node.claims],
@@ -275,6 +284,24 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
         graph = load()
         node_or_404(graph, node_id)
         return {"node": node_id, "lines": why_lines(graph, node_id)}
+
+    @app.get("/api/labels")
+    def api_labels() -> dict[str, Any]:
+        """The cross-reference index: which node defines each label, and its number.
+
+        KaTeX cannot resolve a reference — it renders `\\eqref{eq:main}` as the
+        literal string `\\eqrefeq:m` — so the browser substitutes before it
+        typesets. Numbers come from the last successful compile's `.aux`, i.e. from
+        LaTeX itself; predicting them here would mean reimplementing LaTeX's
+        counters, and being subtly wrong about a number is worse than showing none.
+        """
+        graph = load()
+        index = xref_mod.build(graph)
+        return {
+            "labels": xref_mod.display_map(graph, project, index),
+            "diagnostics": [d.model_dump() for d in xref_mod.check_xref(graph, index)],
+            "has_numbers": bool(xref_mod.resolved_numbers(project)),
+        }
 
     @app.get("/api/check")
     def api_check() -> dict[str, Any]:

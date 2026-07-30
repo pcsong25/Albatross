@@ -337,6 +337,45 @@ def obligations(
 
 
 @app.command()
+def labels(
+    root: Optional[Path] = typer.Option(None, "--root"),
+) -> None:
+    """Every `\\label` and every reference to it, across the whole graph.
+
+    Cross-references work because the renderer puts every node into one document.
+    What this adds is that a dangling or duplicated one is a hard error here
+    (`XRF001`, `XRF002`) rather than a LaTeX warning nobody reads.
+    """
+    project, graph = _graph(root)
+    from . import xref as xref_mod
+
+    index = xref_mod.build(graph)
+    console.print(Text(xref_mod.summarise(index, graph)))
+    diagnostics = xref_mod.check_xref(graph, index)
+    if diagnostics:
+        console.print()
+        for d in diagnostics:
+            console.print(
+                Text(d.node or "-", style="bold"),
+                Text(f"{d.severity}[{d.code}]", style=SEVERITY_STYLE[d.severity]),
+                Text(d.message),
+            )
+    numbers = xref_mod.resolved_numbers(project)
+    console.print()
+    if numbers:
+        console.print(
+            f"[dim]{len(numbers)} number(s) read back from the last compile in "
+            f"{project.build_dir}[/]"
+        )
+    else:
+        console.print(
+            "[dim]no numbers yet: run `bp render --pdf` once and they are read back "
+            "from LaTeX's own .aux[/]"
+        )
+    raise typer.Exit(code=1 if any(d.severity == "error" for d in diagnostics) else 0)
+
+
+@app.command()
 def render(
     root: Optional[Path] = typer.Option(None, "--root"),
     clean: bool = typer.Option(False, "--clean", help="omit all status apparatus"),

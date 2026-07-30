@@ -148,6 +148,7 @@ def extract(
         context.node_block(node, heading="The claim and its proof"),
         context.children_block(graph, node)
         or "## The lemmas this proof cites\n\nNone — this is a leaf.",
+        context.xref_block(graph, node),
         _id_block(node),
     )
     ledger, meta = agent.complete(

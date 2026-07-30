@@ -172,6 +172,20 @@ def children_block(graph: Graph, node: Node) -> str:
     return "\n".join(lines).strip()
 
 
+def xref_block(graph: Graph, node: Node) -> str:
+    """What this node's ``\\ref`` and ``\\eqref`` commands point at.
+
+    A proof containing ``\\eqref{eq:coercivity}`` is not readable without being told
+    what that is, and a model that is not told will invent something and then reason
+    confidently from the invention. Where the reference points is a *deterministic*
+    fact, so it is supplied rather than guessed — and a reference that points at
+    nothing is named as a gap, which is exactly what ``XRF001`` says about it.
+    """
+    from .. import xref
+
+    return xref.obligations_note(xref.build(graph), node.id)
+
+
 def uses_block(node: Node) -> str:
     if not node.uses:
         return ""
