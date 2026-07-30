@@ -19,6 +19,14 @@
 
 'use strict';
 
+//: The API version this page was written against. Compared with the server's on
+//: load and on every poll, because the two halves are deployed independently: `bp ui`
+//: holds Python in a long-running process while the browser fetches this file fresh.
+//: Getting that skew wrong is what produced "Cannot read properties of undefined"
+//: with the action buttons missing, and no way to guess that restarting the server
+//: was the fix.
+const API_VERSION = 3;
+
 const state = {
   graph: null,
   selected: null,
@@ -26,10 +34,40 @@ const state = {
   jobs: [],
   busy: new Set(),
   editing: null,          // 'statement' | 'proof' | null
+  serverVersion: null,    // set on the first poll; a mismatch is reported, not guessed
   macros: {},             // parsed from preamble.tex, handed to KaTeX
   labels: {},             // label -> {node, section, number}: the xref index
   cy: null,
 };
+
+/** Report a page/server mismatch in terms of what to do about it.
+ *
+ * Both directions happen and they need different answers, so it says which. Rendered
+ * into the action bar rather than as a toast: a toast for this scrolls away and leaves
+ * the user staring at a half-drawn panel wondering what they did.
+ */
+function checkVersion(serverVersion) {
+  if (typeof serverVersion !== 'number') {
+    // A server too old to report a version at all. That is itself the answer.
+    serverVersion = 0;
+  }
+  state.serverVersion = serverVersion;
+  const bar = document.getElementById('versionbanner');
+  if (!bar) return;
+  if (serverVersion === API_VERSION) { bar.textContent = ''; bar.classList.add('hidden'); return; }
+
+  bar.textContent = '';
+  bar.classList.remove('hidden');
+  if (serverVersion < API_VERSION) {
+    bar.append(el('b', {}, 'The running server is older than this page. '));
+    bar.append('Stop `bp ui`, start it again, then hard-reload ' +
+               '(Cmd-Shift-R / Ctrl-Shift-R). Until then parts of the node panel ' +
+               'will be missing.');
+  } else {
+    bar.append(el('b', {}, 'The server has been updated. '));
+    bar.append('Hard-reload this page (Cmd-Shift-R / Ctrl-Shift-R) to match it.');
+  }
+}
 
 /* ---------------------------------------------------------------- plumbing */
 
@@ -504,6 +542,7 @@ function toggleCollapse(id) {
 async function refresh(keepSelection) {
   await loadLabels();
   const data = await api('/api/graph');
+  checkVersion(data.api_version);
   data.byId = Object.fromEntries(data.nodes.map((n) => [n.id, n]));
   data.hasParent = {};
   for (const edge of data.edges) data.hasParent[edge.target] = true;
@@ -553,6 +592,36 @@ async function showDetail(id) {
   panel.className = '';
   panel.textContent = '';
   const busy = state.busy.has(id);
+  // Defaults for everything the server sends as a collection. Without them a server
+  // that predates a field — an old `bp ui` still running against a reloaded page —
+  // threw "Cannot read properties of undefined (reading 'length')" partway down the
+  // panel, which aborted the render *before* the Actions row and left an interface
+  // with no buttons and no explanation.
+  node = {
+    children: [], hypotheses: [], flags: [], support: [], blocked_by: [], parents: [],
+    support_detail: [], why: [], claims: [], refs: [], labels: [],
+    ledger_diagnostics: [], verification_reasons: [], obligations: [],
+    claim_obligations: [], reference_obligations: [], uses: {}, verified_against: {},
+    statement: '', proof: '', notes: '', verification_summary: '', ...node,
+  };
+
+  try {
+    renderNodeSections(panel, node, busy);
+  } catch (e) {
+    // One broken section must not cost the user their buttons.
+    panel.append(el('div', { class: 'warnbox' },
+      el('div', {}, el('b', {}, 'Part of this panel could not be drawn. ')),
+      el('div', {}, e.message),
+      el('div', { class: 'small' },
+        'If you have just updated Albatross, the running `bp ui` is older than this ' +
+        'page: stop it, start it again, and hard-reload (Cmd-Shift-R / Ctrl-Shift-R).')));
+  }
+
+  panel.append(el('h3', { class: 'section' }, 'Actions'));
+  panel.append(actionButtons(node, busy));
+}
+
+function renderNodeSections(panel, node, busy) {
 
   panel.append(el('div', { class: 'node-id' }, node.id + (node.target ? '  ★' : '')));
 
@@ -827,8 +896,6 @@ async function showDetail(id) {
     panel.append(el('div', { class: 'prose muted small' }, 'None.'));
   }
 
-  panel.append(el('h3', { class: 'section' }, 'Actions'));
-  panel.append(actionButtons(node, busy));
 }
 
 function sectionHeading(title, key, node, busy) {

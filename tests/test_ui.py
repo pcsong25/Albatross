@@ -884,3 +884,80 @@ class TestLabelsEndpoint:
         detail = client.get("/api/node/a").json()
         assert [x["name"] for x in detail["labels"]] == ["eq:a"]
         assert [x["name"] for x in detail["refs"]] == ["eq:a"]
+
+
+class TestVersionSkew:
+    """`bp ui` holds Python in a long-running process; the browser fetches app.js
+    fresh. So the two halves drift apart on every update, and the symptom was
+    "Cannot read properties of undefined (reading 'length')" partway down the node
+    panel — which aborted the render *before* the action buttons and left an interface
+    with no Expand, no Verify, and no way to guess that restarting the server was the
+    answer.
+    """
+
+    def test_the_server_reports_its_api_version(self, client, project):
+        small(project)
+        from bp.ui.app import API_VERSION
+
+        assert client.get("/api/version").json() == {"api_version": API_VERSION}
+
+    def test_the_version_is_on_the_poll_so_a_restart_is_noticed(self, client, project):
+        """The page polls /api/graph every two seconds, so a server restarted under a
+        live page is detected without the user doing anything."""
+        small(project)
+        from bp.ui.app import API_VERSION
+
+        assert client.get("/api/graph").json()["api_version"] == API_VERSION
+
+    def test_the_version_endpoint_answers_even_on_a_broken_project(self, client, project):
+        """"Your server is stale" is exactly the sort of thing that also breaks
+        everything else, so this endpoint touches nothing."""
+        (project.nodes_dir / "broken.md").write_text("---\nbad: [unclosed\n---\n")
+        assert client.get("/api/version").status_code == 200
+        # While the endpoints that read the graph correctly refuse.
+        assert client.get("/api/graph").status_code == 409
+
+    def test_the_page_and_the_server_agree_right_now(self):
+        """A guard against bumping one and forgetting the other, which would put the
+        banner up permanently."""
+        import re
+        from pathlib import Path
+
+        from bp.ui.app import API_VERSION, STATIC
+
+        js = (STATIC / "app.js").read_text(encoding="utf-8")
+        m = re.search(r"^const API_VERSION = (\d+);", js, re.M)
+        assert m, "app.js does not declare API_VERSION"
+        assert int(m.group(1)) == API_VERSION
+
+    def test_every_field_the_panel_defaults_is_actually_sent(self, client, project):
+        """The defaults exist for old servers, not as cover for a field this server
+        forgot to send. If one goes missing, that is a bug here rather than skew."""
+        small(project)
+        detail = client.get("/api/node/a").json()
+        for field in (
+            "claims", "refs", "labels", "ledger_diagnostics", "verification_reasons",
+            "obligations", "claim_obligations", "reference_obligations",
+            "support_detail", "why", "uses", "verified_against",
+        ):
+            assert field in detail, f"/api/node no longer returns {field}"
+
+
+class TestRenderCannotFiveHundred:
+    def test_a_renderer_failure_is_422_with_a_reason(self, client, project, monkeypatch):
+        """"Internal server error" is the least useful thing this interface can say."""
+        from bp.ui import app as app_mod
+
+        small(project)
+
+        def boom(*a, **k):
+            raise RuntimeError("the template exploded")
+
+        monkeypatch.setattr(app_mod.render_mod, "document", boom)
+        for path in ("/api/render", "/api/render.tex", "/api/render/compile", "/api/render.pdf"):
+            response = client.get(path)
+            assert response.status_code == 422, path
+            detail = response.json()["detail"]
+            assert detail["kind"] == "render_failed"
+            assert "the template exploded" in detail["message"]
+            assert "bp render --stdout" in detail["hint"]

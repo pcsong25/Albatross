@@ -47,6 +47,19 @@ from . import jobs as jobs_mod
 
 STATIC = Path(__file__).parent / "static"
 
+#: Bumped whenever the JSON this module returns gains a field the page relies on.
+#: The page carries the version it was written against and compares, because the two
+#: halves are deployed independently: `bp ui` holds Python in a long-running process
+#: while the browser fetches `app.js` fresh. A page newer than its server threw
+#: "Cannot read properties of undefined" partway down the node panel and took the
+#: action buttons with it — and left the user with no way to know that restarting the
+#: server was the answer. Now the app says so.
+#:
+#: 1  L2 as shipped
+#: 2  claims / ledger_diagnostics / verification (Addendum A)
+#: 3  labels / refs / reference_obligations / audited_against (citations)
+API_VERSION = 3
+
 #: pdflatex writes into a shared build directory, so two compiles at once
 #: interleave and a `FileResponse` can stream a file being rewritten. Module-level
 #: rather than per-app: the build directory belongs to the project on disk.
@@ -263,6 +276,16 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
 
     # --- reads ---------------------------------------------------------------
 
+    @app.get("/api/version")
+    def api_version() -> dict[str, Any]:
+        """What this server is, so the page can tell whether it matches.
+
+        Deliberately the one endpoint that touches nothing: it has to answer even when
+        the project is unreadable, because "your server is stale" is exactly the sort
+        of thing that also breaks everything else.
+        """
+        return {"api_version": API_VERSION}
+
     @app.get("/api/graph")
     def api_graph() -> dict[str, Any]:
         graph = load()
@@ -280,6 +303,8 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
             "target": target.id if target else None,
             "counts": _counts(graph),
             "certificate": _certificate(graph),
+            # On the poll, so a server restarted under a live page is noticed.
+            "api_version": API_VERSION,
         }
 
     @app.get("/api/node/{node_id}")
@@ -395,21 +420,46 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
 
     @app.get("/api/render", response_class=PlainTextResponse)
     def api_render(clean: bool = False, audit: bool = False) -> str:
-        return render_mod.document(
-            load(), clean=clean, audit=audit, preamble=ops.read_preamble(project)
-        )
+        return _render(clean, audit)
 
     @app.get("/api/render.tex")
     def api_render_download(clean: bool = False, audit: bool = False) -> FileResponse:
-        tex = render_mod.document(
-            load(), clean=clean, audit=audit, preamble=ops.read_preamble(project)
-        )
+        tex = _render(clean, audit)
         name = "document" + ("-clean" if clean else "") + ("-audit" if audit else "")
         path = project.build_dir / f"{name}.tex"
         with _build_lock:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(tex, encoding="utf-8")
         return FileResponse(path, media_type="application/x-tex", filename=path.name)
+
+    def _render(clean: bool, audit: bool) -> str:
+        """Generate the document, or fail with something the user can act on.
+
+        `render_mod.document` can raise — a Jinja `StrictUndefined`, a node whose
+        fields defeat a helper. Left alone that is a bare 500 and the word "internal",
+        which is the least useful thing this interface could say. It is a fact about
+        the project, so it comes back as 422 like every other one.
+        """
+        try:
+            return render_mod.document(
+                load(), clean=clean, audit=audit, preamble=ops.read_preamble(project)
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "kind": "render_failed",
+                    "message": "The document could not be generated: "
+                    f"{type(exc).__name__}: {exc}",
+                    "hint": "this is a bug in the renderer rather than in your LaTeX. "
+                    "`bp render --stdout` in a terminal reproduces it with a full "
+                    "traceback, which is what to report.",
+                    "excerpt": "",
+                    "warnings": [],
+                },
+            ) from exc
 
     def _build(clean: bool, audit: bool):
         """Compile one variant, serialised, into its own job name.
@@ -422,14 +472,9 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
         rewriting underneath it.
         """
         name = "document" + ("-clean" if clean else "") + ("-audit" if audit else "")
+        tex = _render(clean, audit)
         with _build_lock:
-            return compile_mod.compile_pdf(
-                render_mod.document(
-                    load(), clean=clean, audit=audit, preamble=ops.read_preamble(project)
-                ),
-                project.build_dir,
-                name=name,
-            )
+            return compile_mod.compile_pdf(tex, project.build_dir, name=name)
 
     def _compile_error(result) -> HTTPException:
         problem = result.problem

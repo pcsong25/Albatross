@@ -44,6 +44,20 @@ Buttons that spend money or time on a model are marked **⚡** below.
 
 Three regions: the **top bar** (whole-project actions, always available), the
 **graph** (orientation), and the **detail panel** (one node, everything about it).
+
+An orange strip may appear under the top bar saying the page and the server do not
+match. `bp ui` holds Python in a long-running process while the browser fetches
+`app.js` fresh, so after an update one half can be older than the other. It tells you
+which:
+
+| It says | Do |
+|---|---|
+| *The running server is older than this page* | Stop `bp ui`, start it again, then hard-reload (Cmd-Shift-R / Ctrl-Shift-R) |
+| *The server has been updated* | Hard-reload the page |
+
+Until you do, parts of the node panel will be missing — but the action buttons always
+render, and a section that cannot be drawn says so in place rather than taking the rest
+with it.
 Everything modal — every sheet in section 5 — opens over the top of all three, and
 **Escape** closes it. That is the only keyboard shortcut; there is no `j`/`k`
 navigation yet.

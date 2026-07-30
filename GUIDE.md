@@ -916,6 +916,16 @@ Be clear-eyed about the gaps. Each is a known deferral with a row in
 
 ## 12. Recipes
 
+**"After updating, the panel shows an error and the buttons are gone."** The running
+`bp ui` is older than the page. Stop it, start it again, and hard-reload
+(Cmd-Shift-R / Ctrl-Shift-R). An orange strip under the top bar tells you this and
+which way round it is; the action buttons render regardless, so you are never stuck.
+
+**"Render LaTeX says internal server error."** That was a bug and it is fixed — a
+document that will not compile now says which package is missing, in the sheet. If you
+still see it, you are on a stale server (restart `bp ui`). If it survives a restart,
+`bp render --pdf` in a terminal prints the real reason with a full traceback.
+
 **"I hand-edited a file and the statuses look wrong."** `bp sweep`. `bp check`
 reports `SYS001` when a file's computed fields are out of date.
 
