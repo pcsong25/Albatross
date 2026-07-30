@@ -1347,3 +1347,43 @@ Albatross. Now mapped to `BackendUnavailable` with the three ways out. An unrela
 **To reverse.** Delete `ROLE_INHERITS` and accept that adding a role changes existing
 projects' providers — but then `bp agents` must refuse to run until every role is
 configured explicitly, which is a worse experience for a first-time user.
+
+---
+
+## D059 — Every backend adjustable from `bp.yaml`, and the file can be made complete
+
+**Date** 2026-07-30 · **Milestone** L3 (friction log)
+
+Asked for directly: *"I want every backend to be adjustable from the bp.yaml file."*
+Auditing against that found two things that were not, plus one gap in the file itself.
+
+**1. The proof-reader's role was hardcoded.** `roles/tidy.py` had `ROLE = "checker"`,
+so it could not be pointed at anything of its own — and it is the one role that is a
+*small, frequent* call, which is exactly the case for a cheap fast model. It is now
+`proofreader`, in `ROLES`, inheriting from `checker` so every existing project behaves
+identically.
+
+**2. Panel membership was a tuple in the code.** `PANEL = ("verifier_a", "verifier_b")`
+meant no `bp.yaml` could add a third reader or run a single-model panel. Now
+`agents.panel`, defaulting to the same pair. Two validations: a name that is not a
+configured role is refused, and an **empty** panel is refused — nobody would read a
+whole proof, nothing could ever be verified, and it would look like a working config.
+Note the trap: `agents.get("panel") or DEFAULT_PANEL` silently turned `[]` into the
+default, because an empty list is falsy. Presence and emptiness are different questions.
+
+**3. `bp agents --fill`.** Inheritance (D058) keeps a project from being repointed when
+a role is added, but it is still a layer the user cannot see in their own file. `--fill`
+writes every unconfigured role in, using the value it already resolves to, with a note
+saying what the role is for and where the value came from. Round-trip YAML, so comments
+and key order survive.
+
+**Why write the resolved value rather than the shipped default.** Because the command
+has to be pure bookkeeping. Writing the default would be a reconfiguration disguised as
+tidying — the user runs `--fill`, their whole setup moves to Anthropic, and the reason
+is buried in a command they thought was cosmetic. There is a test asserting every
+role's backend, model and options are unchanged across a fill.
+
+**A regression test for the whole class.** `test_every_role_the_code_asks_for_by_name_is_a_bp_yaml_key`
+greps `bp/` for `registry.agent("…")` / `config.role("…")` and asserts every name found
+is in `ROLES`. A role resolved by a name nobody can configure is the bug this entry is
+about, and it should not be possible to add another one quietly.

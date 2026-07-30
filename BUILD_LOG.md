@@ -851,3 +851,40 @@ And the defaults list nearly shipped wrong in a way that would have been funny: 
 template documents the collisions it avoids, and those comments quote
 `\newtheorem{lemma}{Lemma}` — so the first version of the extractor reported `lemma`
 twice. A tool for avoiding collisions that invents one.
+
+### Every backend adjustable, and the file made complete
+
+The user checked and said the four roles *were* in their `bp.yaml`. They were — in
+`/Users/peicong/Albatross/bp.yaml`, the repo's own config, which their IDE had open.
+The file `bp` reads for their project is `/Users/peicong/my-theorem/bp.yaml`, and that
+one had five roles. Two files with the same name, and the wrong one is the more
+plausible thing to be looking at. Worth a line in the docs.
+
+Then, against their actual request — *every backend adjustable from bp.yaml* — an audit
+found two things that were not:
+
+- `roles/tidy.py` had `ROLE = "checker"` hardcoded, so the proof-reader could not be
+  pointed at anything of its own. It is now `proofreader`, inheriting from `checker`, and
+  it is the one role that is a small frequent call and therefore wants a cheap fast model.
+- `PANEL = ("verifier_a", "verifier_b")` was a tuple in `roles/verify.py`, so no config
+  could add a third reader or drop to one. Now `agents.panel`.
+
+Plus `bp agents --fill`, which writes every unconfigured role into the file using the
+value it already resolves to. Their file went from five roles to ten, comments intact,
+every row now reading `from: bp.yaml`.
+
+```
+pytest -q       598 passed
+```
+
+**What surprised me.** Two things.
+
+`agents.get("panel") or DEFAULT_PANEL` silently turns an explicitly empty panel into the
+default, because `[]` is falsy — so `panel: []` would have looked like a working
+configuration in which nothing could ever be verified. Presence and emptiness are
+different questions.
+
+And `--fill` had to write the *resolved* value, not the shipped default. Writing the
+default would be a reconfiguration disguised as bookkeeping: the user runs a command
+they think is cosmetic and their whole system moves to another provider. There is now a
+test asserting backend, model and options are all unchanged across a fill.

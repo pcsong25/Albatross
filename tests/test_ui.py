@@ -500,7 +500,7 @@ class TestTidy:
 
     def test_a_correction_is_proposed_not_applied(self, client, project, monkeypatch):
         small(project)
-        self._patch(monkeypatch, project, checker=[json_reply({
+        self._patch(monkeypatch, project, proofreader=[json_reply({
             "changed": True,
             "text": "\\begin{align} a &= b \\end{align}",
             "changes": ["closed the align environment"],
@@ -520,7 +520,7 @@ class TestTidy:
 
     def test_clean_latex_comes_back_unchanged(self, client, project, monkeypatch):
         small(project)
-        self._patch(monkeypatch, project, checker=[json_reply({
+        self._patch(monkeypatch, project, proofreader=[json_reply({
             "changed": False, "text": "$a = b$", "changes": [], "concerns": [],
         })])
         data = client.post("/api/tidy", json={"text": "$a = b$"}).json()
@@ -529,7 +529,7 @@ class TestTidy:
 
     def test_mathematical_concerns_are_reported_not_fixed(self, client, project, monkeypatch):
         small(project)
-        self._patch(monkeypatch, project, checker=[json_reply({
+        self._patch(monkeypatch, project, proofreader=[json_reply({
             "changed": False,
             "text": "$p \\in [1, \\infty]$",
             "changes": [],

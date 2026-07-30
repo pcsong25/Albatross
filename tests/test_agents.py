@@ -448,3 +448,185 @@ class TestClaudeApiCredentials:
         )
         with pytest.raises(TypeError, match="something else entirely"):
             backend.invoke("system", "user", 5)
+
+
+class TestEverythingIsAdjustableFromBpYaml:
+    """"I want every backend to be adjustable from the bp.yaml file." Two things were
+    not: the proof-reader had its role hardcoded to `checker` in `roles/tidy.py`, and
+    panel *membership* was the tuple `("verifier_a", "verifier_b")` in `roles/verify.py`
+    — so no bp.yaml could add a third reader or drop to one."""
+
+    def _config(self, tmp_path, data):
+        import json
+
+        from bp.agents.registry import load_config
+        from bp.paths import Project
+
+        (tmp_path / "nodes").mkdir(exist_ok=True)
+        (tmp_path / "bp.yaml").write_text(json.dumps(data), encoding="utf-8")
+        return load_config(Project(tmp_path))
+
+    def test_the_proofreader_has_its_own_role(self):
+        from bp.agents.registry import ROLES
+        from bp.roles.tidy import ROLE
+
+        assert ROLE == "proofreader"
+        assert ROLE in ROLES
+
+    def test_the_proofreader_inherits_from_checker_by_default(self, tmp_path):
+        """It used to *be* checker, so inheriting keeps every existing project
+        identical while making it adjustable."""
+        config = self._config(
+            tmp_path,
+            {"agents": {"roles": {"checker": {"backend": "codex_cli", "model": "sol"}}}},
+        )
+        assert config.role("proofreader").backend == "codex_cli"
+        assert config.provenance["proofreader"] == "inherited from checker"
+
+    def test_the_panel_defaults_to_the_two_verifiers(self, tmp_path):
+        config = self._config(tmp_path, {})
+        assert config.panel == ["verifier_a", "verifier_b"]
+
+    def test_the_panel_can_be_changed(self, tmp_path):
+        """A third reader, or one — both were impossible before."""
+        roles = {
+            r: {"backend": "codex_cli", "model": "sol"}
+            for r in ("verifier_a", "verifier_b", "checker")
+        }
+        config = self._config(
+            tmp_path,
+            {"agents": {"roles": roles, "panel": ["verifier_a", "verifier_b", "checker"]}},
+        )
+        assert config.panel == ["verifier_a", "verifier_b", "checker"]
+
+        one = self._config(tmp_path, {"agents": {"roles": roles, "panel": ["verifier_a"]}})
+        assert one.panel == ["verifier_a"]
+
+    def test_a_panel_naming_an_unconfigured_role_is_refused(self, tmp_path):
+        from bp.agents.registry import ConfigError
+
+        with pytest.raises(ConfigError, match="not a configured role"):
+            self._config(tmp_path, {"agents": {"panel": ["verifier_z"]}})
+
+    def test_an_empty_panel_is_refused(self, tmp_path):
+        """Nobody would read a whole proof, so no node could ever be verified — and it
+        would look like a working configuration."""
+        from bp.agents.registry import ConfigError
+
+        with pytest.raises(ConfigError, match="nobody would read a whole proof"):
+            self._config(tmp_path, {"agents": {"panel": []}})
+
+    def test_the_panel_is_used_rather_than_the_constant(self, tmp_path, monkeypatch):
+        from bp.roles import verify as verify_role
+
+        # The module constant is only a default now.
+        assert verify_role.PANEL == ("verifier_a", "verifier_b")
+
+    def test_every_role_the_code_asks_for_by_name_is_a_bp_yaml_key(self):
+        """A role resolved by a name that is not in ROLES could never be configured,
+        which is the bug class this whole group is about."""
+        import re
+        from pathlib import Path
+
+        from bp.agents.registry import ROLES
+
+        root = Path(__file__).resolve().parent.parent / "bp"
+        asked: set[str] = set()
+        for path in root.rglob("*.py"):
+            for m in re.finditer(
+                r'(?:registry\.agent|config\.role|\.agent)\(\s*"([a-z_]+)"\s*\)',
+                path.read_text(encoding="utf-8"),
+            ):
+                asked.add(m.group(1))
+        assert asked, "found no role lookups at all — has the pattern changed?"
+        assert asked <= set(ROLES), f"not configurable: {sorted(asked - set(ROLES))}"
+
+
+class TestFillMissingRoles:
+    """`bp agents --fill` writes every unconfigured role into bp.yaml, so the file
+    becomes the complete truth and nothing is inherited."""
+
+    def _project(self, tmp_path, text):
+        from bp.paths import Project
+
+        (tmp_path / "nodes").mkdir(exist_ok=True)
+        (tmp_path / "bp.yaml").write_text(text, encoding="utf-8")
+        return Project(tmp_path)
+
+    ORIGINAL = """# my own notes, which must survive
+agents:
+  roles:
+    # the checker, at high effort
+    checker:
+      backend: codex_cli
+      model: gpt-5.6-sol
+      options:
+        command: [codex, exec, --model, gpt-5.6-sol]
+      timeout: 2400
+budget:
+  max_calls_per_recompile: 40
+"""
+
+    def test_it_writes_every_missing_role(self, tmp_path):
+        from bp.agents.registry import ROLES, fill_missing_roles, load_config
+
+        project = self._project(tmp_path, self.ORIGINAL)
+        added, path = fill_missing_roles(project)
+        assert "checker" not in added
+        assert set(added) == set(ROLES) - {"checker"}
+        config = load_config(project)
+        for role in ROLES:
+            assert config.provenance[role] == "bp.yaml", role
+
+    def test_it_writes_the_value_the_role_already_resolved_to(self, tmp_path):
+        """Nothing about the setup changes — it is only written down. Otherwise the
+        command would be a reconfiguration disguised as bookkeeping."""
+        from bp.agents.registry import fill_missing_roles, load_config
+
+        project = self._project(tmp_path, self.ORIGINAL)
+        before = load_config(project)
+        fill_missing_roles(project)
+        after = load_config(project)
+        for role in before.roles:
+            assert after.role(role).backend == before.role(role).backend, role
+            assert after.role(role).model == before.role(role).model, role
+            assert after.role(role).options == before.role(role).options, role
+
+    def test_the_users_comments_and_options_survive(self, tmp_path):
+        from bp.agents.registry import fill_missing_roles
+
+        project = self._project(tmp_path, self.ORIGINAL)
+        fill_missing_roles(project)
+        text = (tmp_path / "bp.yaml").read_text()
+        assert "# my own notes, which must survive" in text
+        assert "# the checker, at high effort" in text
+        assert "--skip-git-repo-check" not in text  # not invented
+        assert "max_calls_per_recompile: 40" in text
+
+    def test_each_written_role_gets_a_note_saying_what_it_is_for(self, tmp_path):
+        from bp.agents.registry import fill_missing_roles
+
+        project = self._project(tmp_path, self.ORIGINAL)
+        fill_missing_roles(project)
+        text = (tmp_path / "bp.yaml").read_text()
+        assert "biggest lever on cost" in text          # obligation
+        assert "TRANSLATION, not judgement" in text     # extractor
+        assert "added by `bp agents --fill`" in text
+
+    def test_running_it_twice_changes_nothing(self, tmp_path):
+        from bp.agents.registry import fill_missing_roles
+
+        project = self._project(tmp_path, self.ORIGINAL)
+        fill_missing_roles(project)
+        first = (tmp_path / "bp.yaml").read_text()
+        added, _ = fill_missing_roles(project)
+        assert added == []
+        assert (tmp_path / "bp.yaml").read_text() == first
+
+    def test_it_works_on_a_file_with_no_agents_block(self, tmp_path):
+        from bp.agents.registry import ROLES, fill_missing_roles, load_config
+
+        project = self._project(tmp_path, "budget: {max_calls_per_recompile: 5}\n")
+        added, _ = fill_missing_roles(project)
+        assert set(added) == set(ROLES)
+        assert load_config(project).budget.max_calls_per_recompile == 5

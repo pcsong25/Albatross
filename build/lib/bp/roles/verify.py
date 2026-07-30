@@ -79,6 +79,8 @@ LEVEL_JOBS: dict[str, frozenset[str]] = {
     ),
 }
 
+#: The default panel. Actual membership comes from `bp.yaml` (`agents.panel`) via
+#: `Config.panel`, so a project can add a third reader or drop to one.
 PANEL = ("verifier_a", "verifier_b")
 
 
@@ -716,7 +718,7 @@ def verify_proof(
     *,
     registry: Registry | None = None,
     report: VerifyReport | None = None,
-    panel: tuple[str, ...] = PANEL,
+    panel: tuple[str, ...] | None = None,
 ) -> VerifyReport:
     registry = registry or Registry(project)
     report = report or VerifyReport(node=node_id)
@@ -729,6 +731,7 @@ def verify_proof(
     if not node.has_proof:
         raise ops.OpError(f"{node_id} has no proof to verify")
 
+    members = tuple(panel) if panel else tuple(registry.config.panel)
     system = context.load_prompt("verify_proof")
     user = context.join(
         context.preamble_block(project),
@@ -740,7 +743,7 @@ def verify_proof(
         "true; each has its own node and its own verification.",
     )
 
-    for role in panel:
+    for role in members:
         report.panel.setdefault(role, verification.DID_NOT_ANSWER)
         try:
             agent = registry.agent(role)

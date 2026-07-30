@@ -70,9 +70,39 @@ def register(app: typer.Typer) -> None:
     """Attach the L1 commands to the main app."""
 
     @app.command()
-    def agents(root: Optional[Path] = typer.Option(None, "--root")) -> None:
-        """Which model plays which role, and whether it can run here."""
+    def agents(
+        root: Optional[Path] = typer.Option(None, "--root"),
+        fill: bool = typer.Option(
+            False,
+            "--fill",
+            help="write every unconfigured role into bp.yaml, so the file is the "
+            "complete truth and nothing is inherited",
+        ),
+    ) -> None:
+        """Which model plays which role, whether it can run here, and where it came from.
+
+        With `--fill`, every role missing from `bp.yaml` is written into it using the
+        value it currently resolves to — inherited from a role you did configure where
+        possible. Your comments and key order survive. After that there is nothing left
+        for the system to infer.
+        """
         registry = _registry(root)
+        if fill:
+            from .agents.registry import fill_missing_roles
+
+            added, path = fill_missing_roles(registry.project)
+            if added:
+                console.print(
+                    f"wrote {len(added)} role(s) into {path}: " + ", ".join(added)
+                )
+                console.print(
+                    "[dim]each with the value it already resolved to, so nothing about "
+                    "your setup changed — it is just written down now.[/]"
+                )
+            else:
+                console.print(f"{path} already configures every role")
+            console.print()
+            registry = _registry(root)
         table = Table(box=None, pad_edge=False, header_style="bold")
         for column in ("role", "backend", "model", "from", "usable", "note"):
             table.add_column(column, overflow="fold")

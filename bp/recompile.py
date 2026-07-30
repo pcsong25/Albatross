@@ -275,7 +275,7 @@ def plan(
             size = (
                 len(node.statement_section) + len(node.proof_section)
             ) // CHARS_PER_TOKEN
-            for role in verify_role.PANEL:
+            for role in registry.config.panel:
                 if role in registry.config.roles:
                     task.panel += 1
                     _accumulate(result, registry, role, size, PROOF_OUTPUT_TOKENS)

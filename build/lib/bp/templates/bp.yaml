@@ -101,11 +101,23 @@ agents:
       model: claude-opus-5
       timeout: 900
 
+    # Syntax-only corrections when you save a statement. A small, frequent call, so
+    # it is the one role worth putting on something fast and cheap.
+    proofreader:
+      backend: claude_api
+      model: claude-sonnet-5
+      timeout: 600
+
     # Writes proofs for routine and standard leaves only. Never sets a status.
     prover:
       backend: claude_api
       model: claude-sonnet-5
       timeout: 900
+
+  # Who reads a whole proof. Every name must be a configured role above. Two is the
+  # design — from different families — but you can add a third reader or drop to one.
+  # An empty list is refused: nobody would read a proof and nothing could be verified.
+  panel: [verifier_a, verifier_b]
 
 budget:
   # A run stops before the call that would cross either cap.

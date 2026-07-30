@@ -777,6 +777,23 @@ Backends:
 | `claude_cli` | `claude -p` | a Claude subscription | **no** |
 | `codex_cli` | `codex exec` | a Codex subscription | **no** |
 
+**Every backend is adjustable from `bp.yaml`, and `bp agents --fill` makes that
+literal:** it writes every role the file does not mention into it, using the value the
+role already resolves to, keeping your comments and key order. Nothing about your setup
+changes — it is just written down, so there is no layer left to infer. Run it once after
+upgrading.
+
+Beyond the ten roles, one more knob:
+
+```yaml
+agents:
+  panel: [verifier_a, verifier_b]   # who reads a whole proof
+```
+
+Two from different families is the design, but you can add a third reader or drop to
+one. Every name must be a configured role, and an empty list is refused — nobody would
+read a proof and nothing could ever be verified.
+
 `bp agents` prints the table and says which can actually run here — and where each
 role's backend came from:
 

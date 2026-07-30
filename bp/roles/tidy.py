@@ -32,7 +32,10 @@ from . import context
 #: Which role does this. The checker is a strong model already configured, and
 #: this is a small, frequent call — not worth a sixth role in ``bp.yaml`` until
 #: someone wants to point it somewhere cheaper.
-ROLE = "checker"
+#: Its own role, so it can be pointed at something small and cheap — this is a
+#: frequent call on a short passage. It inherits from `checker` when `bp.yaml` does not
+#: configure it, which is exactly what it used to be hardcoded to.
+ROLE = "proofreader"
 
 
 class TidyResult(BaseModel):

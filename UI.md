@@ -477,7 +477,8 @@ The `from` column exists because a role can be configured without you doing it:
 | `built-in default` | nothing to inherit from, so the shipped default applies. Worth checking: those are Anthropic, and without a key the role cannot run |
 
 Two warning boxes appear when they apply: one naming every role that cannot run here,
-and one naming every role that is not in your `bp.yaml`. Also the budget caps, the number of logged
+and one naming every role that is not in your `bp.yaml`. For the second,
+`bp agents --fill` writes them all into the file so there is nothing left inherited. Also the budget caps, the number of logged
 calls, and `Running with --replay` when the server resolves every call from the log
 and can neither reach a provider nor cost money.
 

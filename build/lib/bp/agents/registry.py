@@ -22,12 +22,15 @@ quietly wrong six months from now.
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap
 
+from ..load import atomic_write
 from ..paths import Project
 from .base import Backend, Budget
 from .claude_api import ClaudeAPIBackend
@@ -60,6 +63,7 @@ ROLES = (
     "verifier_b",
     "confirmer",
     "auditor",
+    "proofreader",
     "prover",
 )
 
@@ -87,6 +91,7 @@ DEFAULT_ROLES: dict[str, dict[str, Any]] = {
     "verifier_b": {"backend": "claude_api", "model": "claude-opus-5"},
     "confirmer": {"backend": "claude_api", "model": "claude-opus-5"},
     "auditor": {"backend": "claude_api", "model": "claude-opus-5"},
+    "proofreader": {"backend": "claude_api", "model": "claude-sonnet-5"},
     "prover": {"backend": "claude_api", "model": "claude-sonnet-5"},
 }
 
@@ -113,6 +118,9 @@ ROLE_INHERITS: dict[str, tuple[str, ...]] = {
     # Both of these read a whole argument, like the panel does.
     "confirmer": ("verifier_a", "verifier_b", "checker"),
     "auditor": ("checker", "verifier_a", "decomposer"),
+    # It used to *be* `checker`, hardcoded in `roles/tidy.py`. Inheriting from it keeps
+    # every existing project's behaviour identical while making it adjustable.
+    "proofreader": ("checker", "decomposer", "verifier_a"),
 }
 
 
@@ -132,6 +140,12 @@ class RoleConfig(BaseModel):
     timeout: float = 600.0
 
 
+#: Who reads the whole proof. Two by default, and they should be different model
+#: families — but the *membership* was hardcoded, so a bp.yaml could not add a third
+#: reader or drop to one. Configurable under `agents.panel`.
+DEFAULT_PANEL = ("verifier_a", "verifier_b")
+
+
 class BudgetConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -145,6 +159,8 @@ class Config(BaseModel):
     roles: dict[str, RoleConfig] = Field(default_factory=dict)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     pricing: dict[str, dict[str, float]] = Field(default_factory=dict)
+    #: Which roles read the whole proof. Every name here must be a configured role.
+    panel: list[str] = Field(default_factory=lambda: list(DEFAULT_PANEL))
     #: role -> where its configuration came from: ``"bp.yaml"``, ``"inherited from
     #: <role>"``, or ``"built-in default"``. Reported by ``bp agents`` and by the
     #: browser, because a role the user did not configure is a role they should be
@@ -168,6 +184,77 @@ class Config(BaseModel):
 
 def config_path(project: Project) -> Path:
     return project.root / CONFIG_NAME
+
+
+#: Notes written beside a role when `bp agents --fill` materialises it, so a file that
+#: gains a role six months from now still explains what the role is for.
+ROLE_NOTES: dict[str, str] = {
+    "decomposer": "Proposes children, a reduction, and a complete discharge table.",
+    "checker": "Two fixed questions about a decomposition. Also the proof-reader, unless `proofreader` is set.",
+    "extractor": "Lists every load-bearing claim a proof makes. TRANSLATION, not judgement: use your cheapest setting.",
+    "obligation": "The narrow checks: discharges, ledger claims, citations. Most of the calls at --level deep, so the biggest lever on cost.",
+    "verifier_a": "The whole-proof panel. These two should be DIFFERENT model families -- that is the entire reason there are two.",
+    "verifier_b": "See verifier_a.",
+    "confirmer": "Re-reads each objection in context and drops the ones that dissolve. Do not economise: without it the list is mostly pedantry.",
+    "auditor": "Four questions about a statement, no proof in view. --level deep only.",
+    "proofreader": "Syntax-only corrections when you save a statement. Small and frequent.",
+    "prover": "Writes proofs for routine and standard leaves. Never sets a status.",
+}
+
+
+def fill_missing_roles(project: Project) -> tuple[list[str], Path]:
+    """Write every unconfigured role into ``bp.yaml``, and return which ones.
+
+    The point is that the file becomes the complete truth. Inheritance
+    (:data:`ROLE_INHERITS`) exists so that adding a role to Albatross never silently
+    repoints an existing project — but inheritance is still a layer the user cannot see
+    in their own file, and "I want every backend adjustable from bp.yaml" is a
+    reasonable thing to want. After this there is nothing left to infer.
+
+    Round-trip YAML, so comments, key order and quote style survive: this file is
+    hand-maintained and full of the user's own notes about why each role is set the way
+    it is.
+    """
+    path = config_path(project)
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    yaml.width = 4096
+    yaml.indent(mapping=2, sequence=4, offset=2)
+
+    data = yaml.load(path.read_text(encoding="utf-8")) if path.exists() else None
+    if data is None:
+        data = CommentedMap()
+    agents = data.setdefault("agents", CommentedMap())
+    roles = agents.setdefault("roles", CommentedMap())
+
+    resolved = load_config(project)
+    added: list[str] = []
+    for name in ROLES:
+        if name in roles:
+            continue
+        spec = resolved.role(name)
+        entry = CommentedMap()
+        entry["backend"] = spec.backend
+        entry["model"] = spec.model
+        if spec.options:
+            entry["options"] = spec.options
+        entry["timeout"] = spec.timeout
+        roles[name] = entry
+        note = ROLE_NOTES.get(name)
+        source = resolved.provenance.get(name, "")
+        comment = f"{note} [added by `bp agents --fill`; {source}]" if note else None
+        if comment:
+            try:
+                roles.yaml_set_comment_before_after_key(name, before=comment, indent=4)
+            except AttributeError:  # pragma: no cover - a plain dict
+                pass
+        added.append(name)
+
+    if added:
+        buf = io.StringIO()
+        yaml.dump(data, buf)
+        atomic_write(path, buf.getvalue())
+    return added, path
 
 
 def load_config(project: Project) -> Config:
@@ -206,10 +293,30 @@ def load_config(project: Project) -> Config:
             provenance[name] = "built-in default"
 
     try:
+        # `or DEFAULT_PANEL` would be wrong: an empty list is falsy, so an explicitly
+        # empty panel would silently become the default instead of being refused.
+        panel = (
+            list(agents["panel"] or [])
+            if "panel" in agents and agents["panel"] is not None
+            else list(DEFAULT_PANEL)
+        )
+        unknown = [p for p in panel if p not in roles]
+        if unknown:
+            raise ConfigError(
+                f"{path}: agents.panel names {', '.join(unknown)}, which "
+                + ("is not a configured role" if len(unknown) == 1 else "are not configured roles")
+                + ". Add them under agents.roles, or remove them from the panel."
+            )
+        if not panel:
+            raise ConfigError(
+                f"{path}: agents.panel is empty, so nobody would read a whole proof "
+                "and no node could ever be verified. Name at least one role."
+            )
         return Config(
             roles=roles,
             budget=data.get("budget") or {},
             pricing=data.get("pricing") or {},
+            panel=panel,
             provenance=provenance,
         )
     except Exception as exc:
