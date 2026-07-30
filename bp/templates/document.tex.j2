@@ -101,8 +101,14 @@
 ((* if entry.boxed *))
 \end{bpbox}
 ((* endif *))
+((* if entry.scrutiny *))
+\bpaudit{(((entry.scrutiny)))}
+((* endif *))
 ((* if entry.audit *))
 \bpaudit{(((entry.audit)))}
+((* endif *))
+((* if entry.ledger *))
+\bpaudit{(((entry.ledger)))}
 ((* endif *))
 ((* if entry.proof and entry.sketch *))
 
@@ -135,6 +141,9 @@ The following are in the project but nothing on the path to the target uses them
 ((* endif *))
 (((entry.statement)))
 \end{(((entry.env)))}
+((* if entry.scrutiny *))
+\bpaudit{(((entry.scrutiny)))}
+((* endif *))
 ((* if entry.proof *))
 
 \begin{proof}

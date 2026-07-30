@@ -236,11 +236,11 @@ class TestJobs:
         small(project)
         self._patch_registry(
             monkeypatch, project,
-            verifier_a=[json_reply({"entails": True, "why": "yes", "confidence": "high"}),
-                        json_reply({"checked": ["step 1"], "objections": []})],
+            obligation=[json_reply({"entails": True, "why": "yes", "confidence": "high"})],
+            verifier_a=[json_reply({"checked": ["step 1"], "objections": []})],
             verifier_b=[json_reply({"checked": ["all"], "objections": []})],
         )
-        started = client.post("/api/jobs/verify/a", json={}).json()
+        started = client.post("/api/jobs/verify/a", json={"level": "quick"}).json()
         assert started["status"] in ("queued", "running")
         assert started["id"]
 
@@ -545,3 +545,152 @@ class TestTidy:
         small(project)
         self._patch(monkeypatch, project)  # no scripted response
         assert client.post("/api/tidy", json={"text": "$a$"}).status_code == 502
+
+
+class TestLedgerAndRecord:
+    """The browser must tell the same story the terminal does.
+
+    Nothing here computes anything: every field is the core's answer, serialised.
+    """
+
+    def _patch(self, monkeypatch, project, **responses):
+        from bp.ui import app as app_mod
+
+        def fake(proj, *a, **kw):
+            registry = scripted_registry(project, **responses)
+            registry.observer = kw.get("observer")
+            return registry
+
+        monkeypatch.setattr(app_mod, "Registry", fake)
+
+    def test_a_node_with_no_ledger_says_so(self, client, project):
+        small(project)
+        data = client.get("/api/node/a").json()
+        assert data["claims"] == []
+        assert data["ledger_stale"] is False
+        assert data["verification"] is None
+        assert data["verification_summary"] == "never verified"
+
+    def test_the_ledger_and_its_diagnostics_are_served(self, client, project):
+        from bp.hash import proof_hash
+
+        small(project)
+        graph = ops.open_graph(project)
+        ops.record_ledger(
+            project,
+            "a",
+            [
+                {"id": "c1", "text": "s > 3/2", "source": {"kind": "hypothesis", "ref": "H1"}},
+                {"id": "c2", "text": "\\omega \\in C^1", "source": {"kind": "none", "ref": ""}},
+            ],
+            proof_hash(graph["a"]),
+        )
+        data = client.get("/api/node/a").json()
+        assert [c["id"] for c in data["claims"]] == ["c1", "c2"]
+        assert data["claims"][1]["source"]["kind"] == "none"
+        assert [d["code"] for d in data["ledger_diagnostics"]] == ["LED001"]
+        # One claim obligation: the unsourced one is already decided by LED001.
+        assert [r["claim"] for r in data["claim_obligations"]] == ["c1"]
+
+    def test_a_stale_ledger_is_reported(self, client, project):
+        small(project)
+        # A hash that is not this proof's, so the ledger reads as out of date.
+        ops.record_ledger(project, "a", [{"id": "c1", "text": "x"}], "0" * 12)
+        data = client.get("/api/node/a").json()
+        assert data["ledger_stale"] is True
+        assert "LED100" in [d["code"] for d in data["ledger_diagnostics"]]
+
+    def test_extract_writes_the_ledger_through_ops(self, client, project, monkeypatch):
+        small(project)
+        self._patch(
+            monkeypatch,
+            project,
+            extractor=[
+                json_reply(
+                    {
+                        "claims": [
+                            {"id": "c1", "text": "s > 3/2",
+                             "source": {"kind": "hypothesis", "ref": "H1"}},
+                            {"id": "c2", "text": "\\omega \\in C^1",
+                             "source": {"kind": "none", "ref": ""}},
+                        ]
+                    }
+                )
+            ],
+        )
+        started = client.post("/api/jobs/extract/a").json()
+        job = _wait(client, started["id"])
+        assert job["status"] == "done"
+        assert job["result"]["claims"] == 2
+        assert job["result"]["unsourced"] == ["c2"]
+        assert [c.id for c in graph_of(project)["a"].claims] == ["c1", "c2"]
+
+    def test_audit_writes_a_note_and_never_a_status(self, client, project, monkeypatch):
+        small(project)
+        self._patch(
+            monkeypatch,
+            project,
+            auditor=[
+                json_reply(
+                    {
+                        "well_posed": {"ok": True, "checked": "all bound", "findings": []},
+                        "non_vacuous": {"verdict": "not_found", "witness": "",
+                                        "conflict": "H1 and H2 cannot both hold"},
+                        "quantifiers": {"ok": True, "checked": "as intended", "findings": []},
+                        "constants": {"ok": True, "constants": [], "findings": []},
+                    }
+                )
+            ],
+        )
+        started = client.post("/api/jobs/audit/a").json()
+        job = _wait(client, started["id"])
+        assert job["status"] == "done"
+        assert job["result"]["verdict"] == "flagged"
+        node = graph_of(project)["a"]
+        assert "cannot both hold" in node.notes_section
+        assert node.local_status == "unverified"
+
+    def test_verify_serves_the_record_it_wrote(self, client, project, monkeypatch):
+        small(project)
+        self._patch(
+            monkeypatch,
+            project,
+            verifier_a=[json_reply({"checked": ["step 1"], "objections": []})],
+            verifier_b=[json_reply({"checked": ["all"], "objections": []})],
+        )
+        started = client.post("/api/jobs/verify/a", json={"level": "quick"}).json()
+        job = _wait(client, started["id"])
+        assert job["result"]["level"] == "quick"
+        assert job["result"]["record"]["level"] == "quick"
+        data = client.get("/api/node/a").json()
+        assert data["verification"]["level"] == "quick"
+        assert "level quick" in data["verification_summary"]
+
+    def test_an_unknown_verify_level_is_a_400_not_a_failed_job(self, client, project):
+        small(project)
+        response = client.post("/api/jobs/verify/a", json={"level": "thorough"})
+        assert response.status_code == 400
+        assert "quick" in response.json()["detail"]
+
+    def test_the_recompile_plan_takes_a_level(self, client, project):
+        small(project)
+        quick = client.get("/api/recompile/plan?level=quick").json()
+        deep = client.get("/api/recompile/plan?level=deep").json()
+        assert quick["level"] == "quick" and deep["level"] == "deep"
+        assert deep["calls"] >= quick["calls"]
+        assert client.get("/api/recompile/plan?level=thorough").status_code == 400
+
+    def test_a_recompile_at_a_level_reports_it_back(self, client, project, monkeypatch):
+        small(project)
+        self._patch(
+            monkeypatch,
+            project,
+            verifier_a=[json_reply({"checked": ["x"], "objections": []})] * 3,
+            verifier_b=[json_reply({"checked": ["y"], "objections": []})] * 3,
+        )
+        started = client.post(
+            "/api/jobs/recompile", json={"nodes": [], "level": "quick"}
+        ).json()
+        job = _wait(client, started["id"])
+        assert job["status"] == "done"
+        assert job["result"]["level"] == "quick"

@@ -19,6 +19,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
+from . import verification as verification_mod
 from .model import ID_RE, Node
 from .propagate import (
     BLOCKED_CHILDREN,
@@ -192,6 +193,28 @@ def _mark_for(node: Node, graph) -> dict[str, str] | None:
     return {"colour": colour, "label": label, "text": text}
 
 
+def _scrutiny_line(node: Node) -> str:
+    """What checking this node actually received, printed under its statement.
+
+    A node verified at ``quick`` and one verified at ``deep`` are not the same
+    claim, and the document is what the user reads — so the level, the counts and
+    the models go into the LaTeX rather than living only in the frontmatter. A
+    green colour with no provenance is the thing most likely to be over-trusted.
+    """
+    if node.local_status not in {"verified", "flagged"}:
+        return ""
+    record = node.verification
+    if record is None:
+        return (
+            "Checked. No verification record: this status predates the record, or was "
+            "set by hand."
+        )
+    # `escape`, not `prose`: every word of this line is generated — level names,
+    # role names, counts, a timestamp — and `verifier_a` in text mode is "Missing $
+    # inserted" and no PDF. Nothing a person wrote passes through here.
+    return "Checked. " + escape(verification_mod.compact(record))
+
+
 def _audit_line(node: Node, graph) -> str:
     if not node.uses:
         return ""
@@ -212,6 +235,27 @@ def _audit_line(node: Node, graph) -> str:
     return "Discharges. " + "; ".join(chunks) + "."
 
 
+def _ledger_line(node: Node) -> str:
+    """The claim ledger, for ``--audit``.
+
+    Sourced claims are counted rather than listed; the unsourced ones are named,
+    because those are the ones that are actually debt.
+
+    A claim's ``text`` is a **math-mode fragment**, like ``Hypothesis.tex`` —
+    ``\\omega \\in C^1``, not ``$\\omega \\in C^1$`` — so it goes through
+    :func:`math`. Passing it through :func:`prose` gives "Missing $ inserted" and
+    no PDF.
+    """
+    if not node.claims:
+        return ""
+    unsourced = node.unsourced_claims
+    head = f"Claim ledger. {len(node.claims)} load-bearing claim(s)"
+    if not unsourced:
+        return head + ", each with a named source."
+    items = "; ".join(f"{escape(c.id)}: {math(c.text)}" for c in unsourced)
+    return head + f", of which {len(unsourced)} unsourced --- {items}."
+
+
 def _entry(node: Node, graph, clean: bool, audit: bool) -> dict[str, object]:
     known = set(graph.active)
     boxed = node.local_status in {"admitted", "assumption"}
@@ -230,6 +274,8 @@ def _entry(node: Node, graph, clean: bool, audit: bool) -> dict[str, object]:
         "boxed": boxed,
         "mark": None if clean else _mark_for(node, graph),
         "audit": _audit_line(node, graph) if (audit and not clean) else "",
+        "ledger": _ledger_line(node) if (audit and not clean) else "",
+        "scrutiny": "" if clean else _scrutiny_line(node),
         "no_proof_note": None,
         # An admitted node's Proof section is a sketch of an argument nobody has
         # made. Setting it in a `proof` environment would end it with a QED box,

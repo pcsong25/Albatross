@@ -21,9 +21,9 @@ uses:
   gclm.one-scale-hilbert-coercivity:
     applied_to: f=\omega(t,\cdot),\quad z=-\partial_x\omega(t,0),\quad M=2\|\omega_0\|_{L^\infty},\quad \theta=\theta_a
     discharges:
-      H1: proof:oddness is part of the parent statement, while the standing solution regularity with s>3/2 gives f\in C^1(\mathbb S^1) by Sobolev embedding
+      H1: proof:oddness is part of the parent statement, while the standing solution regularity with $s>3/2$ gives $f\in C^1(\mathbb S^1)$ by Sobolev embedding
       H2: hypothesis:H2
-      H3: proof:M:=2\|\omega_0\|_{L^\infty}>0 because \omega_0'(0)<0 in the standing setting
+      H3: proof:$M:=2\|\omega_0\|_{L^\infty}>0$ because $\omega_0'(0)<0$ in the standing setting
       H4: hypothesis:H3
       H5: child:gclm.critical-scale-domination
       H6: child:gclm.critical-scale-domination
@@ -32,9 +32,9 @@ uses:
     applied_to: f=\omega(t,\cdot),\quad z=-\partial_x\omega(t,0),\quad M=2\|\omega_0\|_{L^\infty}
     discharges:
       H1: hypothesis:H1
-      H2: proof:oddness is part of the parent statement, while the standing solution regularity with s>3/2 gives f\in C^1(\mathbb S^1)
+      H2: proof:oddness is part of the parent statement, while the standing solution regularity with $s>3/2$ gives $f\in C^1(\mathbb S^1)$
       H3: hypothesis:H2
-      H4: proof:M:=2\|\omega_0\|_{L^\infty}>0 because \omega_0'(0)<0
+      H4: proof:$M:=2\|\omega_0\|_{L^\infty}>0$ because $\omega_0'(0)<0$
       H5: hypothesis:H3
   gclm.high-frequency-obstruction:
     applied_to: f_n(x)=-n^{-1}\sin(nx)\text{ and }\theta=\theta_a

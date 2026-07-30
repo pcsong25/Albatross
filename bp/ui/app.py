@@ -25,7 +25,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .. import checks, events as events_mod, frontier, ops, recompile as recompile_mod
+from .. import ledger as ledger_mod
 from .. import render as render_mod
+from .. import verification as verification_mod
 from .. import why as why_mod
 from ..agents.log import CallLog
 from ..agents.registry import ConfigError, Registry
@@ -33,8 +35,10 @@ from ..discharge import obligations_for
 from ..graph import Graph
 from ..model import Node
 from ..paths import Project
+from ..roles import audit as audit_role
 from ..roles import check as check_role
 from ..roles import decompose as decompose_role
+from ..roles import extract as extract_role
 from ..roles import prove as prove_role
 from ..roles import tidy as tidy_role
 from ..roles import verify as verify_role
@@ -89,8 +93,18 @@ class ArchiveBody(BaseModel):
     cascade: bool = True
 
 
+class VerifyBody(BaseModel):
+    #: quick | standard | deep. See :mod:`bp.recompile` for what each runs.
+    level: str | None = None
+    #: Obligation and claim checks per call. 1 is the reliable one; batching
+    #: trades reliability for cost and is opt-in everywhere.
+    batch: int = 1
+
+
 class RecompileBody(BaseModel):
     nodes: list[str] = Field(default_factory=list)
+    level: str | None = None
+    batch: int = 1
 
 
 # --- serialisation ------------------------------------------------------------
@@ -141,6 +155,17 @@ def node_detail(graph: Graph, node: Node) -> dict[str, Any]:
             for s in node.support
         ],
         "obligations": obligations_for(node, graph),
+        "claim_obligations": ledger_mod.claim_obligations_for(node, graph),
+        "claims": [c.model_dump() for c in node.claims],
+        "ledger_stale": ledger_mod.ledger_is_stale(node),
+        "ledger_diagnostics": [d.model_dump() for d in ledger_mod.check_ledger(node)],
+        # The verification record, so the browser can say what a green node was
+        # actually checked for rather than only that it is green.
+        "verification": verification_mod.as_dict(node.verification),
+        "verification_summary": verification_mod.compact(node.verification),
+        "verification_reasons": (
+            verification_mod.reasons(node.verification) if node.verification else []
+        ),
         "why": why_lines(graph, node.id),
     }
 
@@ -545,20 +570,81 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
 
         return runner.submit("check-decomp", node_id, work).as_dict()
 
-    @app.post("/api/jobs/verify/{node_id}")
-    def api_verify(node_id: str) -> dict[str, Any]:
+    @app.post("/api/jobs/extract/{node_id}")
+    def api_extract(node_id: str) -> dict[str, Any]:
+        """Build the claim ledger for a proof. One cheap call.
+
+        The ledger is a computed field, so this is the only route that can write
+        it, and it writes it through ``ops.record_ledger`` like everything else.
+        """
         def work(job: jobs_mod.Job) -> dict[str, Any]:
-            report = verify_role.verify(project, node_id, registry=registry_for(job))
+            result = extract_role.extract(project, node_id, registry=registry_for(job))
+            return {
+                "claims": result.claims,
+                "unsourced": result.unsourced,
+                "clean": result.clean,
+                "diagnostics": [d.model_dump() for d in result.diagnostics],
+                "omitted": result.ledger.omitted if result.ledger else "",
+            }
+
+        return runner.submit("extract", node_id, work).as_dict()
+
+    @app.post("/api/jobs/audit/{node_id}")
+    def api_audit(node_id: str) -> dict[str, Any]:
+        """Audit a statement. Writes a note, never a status."""
+        def work(job: jobs_mod.Job) -> dict[str, Any]:
+            report = audit_role.audit(project, node_id, registry=registry_for(job))
+            result = report.audit
             return {
                 "verdict": report.verdict,
+                "clean": report.clean,
+                "well_posed": result.well_posed.model_dump() if result else None,
+                "non_vacuous": result.non_vacuous.model_dump() if result else None,
+                "quantifiers": result.quantifiers.model_dump() if result else None,
+                "constants": result.constants.model_dump() if result else None,
+                "findings": [
+                    {"where": label, **finding.model_dump()}
+                    for label, finding in (result.findings if result else [])
+                ],
+            }
+
+        return runner.submit("audit", node_id, work).as_dict()
+
+    @app.post("/api/jobs/verify/{node_id}")
+    def api_verify(node_id: str, body: VerifyBody | None = None) -> dict[str, Any]:
+        level = (body.level if body else None) or verification_mod.STANDARD
+        batch = (body.batch if body else 1) or 1
+        if level not in verification_mod.LEVELS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown level {level!r}; the levels are "
+                + ", ".join(verification_mod.LEVELS),
+            )
+
+        def work(job: jobs_mod.Job) -> dict[str, Any]:
+            report = verify_role.verify(
+                project, node_id, registry=registry_for(job), level=level, batch=batch
+            )
+            return {
+                "verdict": report.verdict,
+                "level": report.level,
                 "obligations_checked": report.obligations_checked,
                 "obligations_cached": report.obligations_cached,
+                "claims_checked": report.claims_checked,
+                "claims_cached": report.claims_cached,
+                "ledger_claims": report.ledger_claims,
+                "ledger_unsourced": report.ledger_unsourced,
+                "statement_audit": report.statement_audit,
                 "panel_ran": report.panel_ran,
+                "panel": report.panel,
                 "flags": [f.to_record() for f in report.flags],
                 "withdrawn": [
                     {"kind": f.kind, "why": f.why, "resolved": why} for f, why in report.withdrawn
                 ],
                 "checked": report.checked,
+                "reasons": report.reasons,
+                "record": verification_mod.as_dict(report.record),
+                "summary": verification_mod.compact(report.record),
             }
 
         return runner.submit("verify", node_id, work).as_dict()
@@ -578,20 +664,34 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
         return runner.submit("prove", node_id, work).as_dict()
 
     @app.get("/api/recompile/plan")
-    def api_recompile_plan() -> dict[str, Any]:
+    def api_recompile_plan(
+        level: str = verification_mod.STANDARD, batch: int = 1
+    ) -> dict[str, Any]:
         """The dry run. Makes no model calls, so it can answer synchronously."""
+        if level not in verification_mod.LEVELS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown level {level!r}; the levels are "
+                + ", ".join(verification_mod.LEVELS),
+            )
         try:
             registry = Registry(project, replay=app.state.replay)
         except ConfigError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        plan = recompile_mod.plan(project, registry=registry)
+        plan = recompile_mod.plan(project, registry=registry, level=level, batch=batch)
         return {
+            "level": plan.level,
+            "batch": plan.batch,
             "tasks": [
                 {
                     "node": t.node,
                     "reason": t.reason,
                     "calls": t.calls,
                     "obligations": t.obligations,
+                    "claims": t.claims,
+                    "extract": t.extract,
+                    "audit": t.audit,
+                    "panel": t.panel,
                     "cached": t.cached,
                 }
                 for t in plan.tasks
@@ -604,12 +704,25 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
 
     @app.post("/api/jobs/recompile")
     def api_recompile(body: RecompileBody) -> dict[str, Any]:
+        level = body.level or verification_mod.STANDARD
+        if level not in verification_mod.LEVELS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown level {level!r}; the levels are "
+                + ", ".join(verification_mod.LEVELS),
+            )
+
         def work(job: jobs_mod.Job) -> dict[str, Any]:
             result = recompile_mod.run(
-                project, registry=registry_for(job), only=list(body.nodes) or None
+                project,
+                registry=registry_for(job),
+                only=list(body.nodes) or None,
+                level=level,
+                batch=body.batch or 1,
             )
             return {
                 "job": result.job.id,
+                "level": result.level,
                 "verified": result.verified,
                 "flagged": result.flagged,
                 "skipped": result.skipped,
@@ -622,7 +735,9 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
         # swallowing it here once cost an afternoon by hiding a TypeError.
         planned = [
             t.node
-            for t in recompile_mod.plan(project, only=list(body.nodes) or None).tasks
+            for t in recompile_mod.plan(
+                project, only=list(body.nodes) or None, level=level
+            ).tasks
         ]
         return runner.submit("recompile", None, work, nodes=planned).as_dict()
 

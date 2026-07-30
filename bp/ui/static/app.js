@@ -574,6 +574,65 @@ async function showDetail(id) {
     panel.append(uses);
   }
 
+  // --- claim ledger
+  //
+  // The `uses` table covers the children's hypotheses. This covers what the
+  // reduction claims on its own account, which is where premise smuggling lives.
+  // Unsourced claims are called out, because those are the ones that are debt.
+  if (node.claims.length || node.has_proof) {
+    const head = el('h3', { class: 'section' }, 'Claim ledger');
+    head.append(el('button', {
+      ...(busy ? { disabled: 'disabled' } : {}),
+      onclick: () => runJob('extract', node.id),
+    }, node.claims.length ? 're-extract' : 'extract'));
+    panel.append(head);
+    if (!node.claims.length) {
+      panel.append(el('div', { class: 'prose muted small' },
+        'Not extracted. Extraction lists every load-bearing claim this proof makes ' +
+        'with the source the prose offers, so LED001 can fire on the ones that have ' +
+        'none. One cheap call.'));
+    } else {
+      if (node.ledger_stale) {
+        panel.append(el('div', { class: 'warnbox' },
+          'This ledger was extracted from an earlier version of the proof. Re-extract: ' +
+          'until then the audit is describing text that is no longer here.'));
+      }
+      const list = el('div', { class: 'uses' });
+      for (const claim of node.claims) {
+        const unsourced = claim.source.kind === 'none';
+        const row = el('div', { class: 'dis' + (unsourced ? ' admitted' : '') });
+        row.append(el('span', { class: 'hid' }, claim.id));
+        // A claim's text is a math-mode fragment, like a hypothesis `tex` — the
+        // dollars are the renderer's job, not the model's.
+        row.append(mathProse('$' + claim.text + '$'));
+        row.append(el('span', { class: 'muted small' }, unsourced
+          ? '  ← UNSOURCED'
+          : `  ← ${claim.source.kind}${claim.source.ref ? ': ' + claim.source.ref : ''}`));
+        list.append(row);
+      }
+      panel.append(list);
+      for (const d of node.ledger_diagnostics) {
+        panel.append(el('div', { class: d.severity === 'error' ? 'warnbox' : 'row small muted' },
+          `${d.code}: ${d.message}`));
+      }
+    }
+  }
+
+  // --- the verification record
+  //
+  // `verified` must not be an opaque flag: a node checked at `quick` and one
+  // checked at `deep` are not making the same claim, and a colour with no
+  // provenance is the thing most likely to be over-trusted.
+  panel.append(el('h3', { class: 'section' }, 'Verification record'));
+  panel.append(el('div', { class: 'row small' }, node.verification_summary));
+  for (const reason of node.verification_reasons) {
+    panel.append(el('div', { class: 'row small muted' }, 'flagged because: ' + reason));
+  }
+  if (node.verification && Object.keys(node.verification.models || {}).length) {
+    panel.append(el('div', { class: 'row small muted' }, 'models: ' +
+      Object.entries(node.verification.models).map(([k, v]) => `${k}=${v}`).join(', ')));
+  }
+
   // --- objections
   if (node.flags.length) {
     panel.append(el('h3', { class: 'section' }, 'Objections'));
@@ -759,7 +818,9 @@ function actionButtons(node, busy) {
     add('Check decomposition', () => runJob('check-decomp', node.id));
   }
   if (!node.children.length) add('Generate proof', () => runJob('prove', node.id));
-  if (node.has_proof) add('Verify', () => runJob('verify', node.id));
+  if (node.has_proof) add('Verify', () => verifyDialog(node), { primary: !node.children.length });
+  if (node.has_proof) add('Extract claims', () => runJob('extract', node.id));
+  add('Audit statement', () => runJob('audit', node.id));
 
   add('Add child', () => addChildDialog(node));
   add('Add note', () => noteDialog(node));
@@ -806,6 +867,47 @@ function expandDialog(node, isRedo) {
     {
       label: isRedo ? 'Archive and decompose' : 'Decompose', primary: true,
       onClick: () => { closeSheet(); runJob(isRedo ? 'redo' : 'expand', node.id, { hint: area.value }); },
+    },
+  ]);
+}
+
+/** Pick the level to verify at.
+ *
+ * The level is the cost knob, and it is also part of what the verdict *means* —
+ * so it is a deliberate choice rather than a default the user never sees.
+ */
+const LEVEL_BLURB = {
+  quick: 'Deterministic checks and the whole-proof pass. Fast; for iterating.',
+  standard: 'Adds claim extraction, the ledger audit and every discharge obligation. ' +
+            'Routine work.',
+  deep: 'Adds a check on every sourced claim and a statement audit. Roughly fifteen ' +
+        'calls on a ten-claim proof — run it before trusting a subtree.',
+};
+
+function verifyDialog(node) {
+  const body = el('div', {});
+  body.append(el('p', { class: 'small muted' },
+    'Three jobs, cached separately: every discharge obligation, every ledger claim, ' +
+    'and the whole proof read by two models. Then a confirmation pass over every ' +
+    'objection. What ran is recorded on the node — a node verified at quick and one ' +
+    'verified at deep are not the same claim.'));
+  const select_ = el('select', {});
+  for (const level of ['quick', 'standard', 'deep']) {
+    const option = el('option', { value: level }, level);
+    if (level === 'standard') option.setAttribute('selected', 'selected');
+    select_.append(option);
+  }
+  const blurb = el('div', { class: 'small muted' }, LEVEL_BLURB.standard);
+  select_.addEventListener('change', () => { blurb.textContent = LEVEL_BLURB[select_.value]; });
+  body.append(el('label', { class: 'small muted' }, 'Level'), select_, blurb);
+  sheet('Verify ' + node.id, body, [
+    { label: 'Cancel', onClick: closeSheet },
+    {
+      label: 'Verify', primary: true,
+      onClick: () => {
+        closeSheet();
+        runJob('verify', node.id, { level: select_.value, batch: 1 });
+      },
     },
   ]);
 }
@@ -1028,6 +1130,7 @@ async function whySheet(id) {
 
 const JOB_LABEL = {
   expand: 'Decomposing', redo: 'Redoing', 'check-decomp': 'Checking the decomposition',
+  extract: 'Extracting the claim ledger', audit: 'Auditing the statement',
   verify: 'Verifying', prove: 'Writing a proof', recompile: 'Recompiling', resume: 'Resuming',
 };
 
@@ -1163,11 +1266,73 @@ function showJobResult(job) {
         body.append(list);
       }
     }
+  } else if (job.kind === 'extract') {
+    body.append(el('p', {},
+      el('b', {}, `${result.claims} claim(s)`),
+      ` extracted, ${(result.unsourced || []).length} with no source.`));
+    if ((result.unsourced || []).length) {
+      body.append(el('div', { class: 'warnbox' },
+        'LED001 fires on ' + result.unsourced.join(', ') + '. An unsourced load-bearing ' +
+        'claim is a premise the proof is smuggling in — justify it, or decompose it out ' +
+        'into its own node.'));
+    } else {
+      body.append(el('p', { class: 'small muted' },
+        'Every load-bearing claim names a source. Whether each source actually gives its ' +
+        'claim is a separate, narrower question — run Verify at level deep.'));
+    }
+    for (const d of result.diagnostics || []) {
+      body.append(el('div', { class: d.severity === 'error' ? 'warnbox' : 'row small muted' },
+        `${d.code}: ${d.message}`));
+    }
+    if (result.omitted) {
+      body.append(el('p', { class: 'small muted' }, 'Deliberately omitted: ' + result.omitted));
+    }
+  } else if (job.kind === 'audit') {
+    body.append(el('p', {}, el('b', {}, 'Statement audit: ' + result.verdict)));
+    body.append(el('p', { class: 'small muted' },
+      'This role stands in for the deterministic vacuity and constant-scope checks that ' +
+      'v0 defers, and is weaker than both. Its answers are prompts for your attention, ' +
+      'not checks — nothing here changed a status.'));
+    const w = result.non_vacuous || {};
+    const vac = el('div', { class: w.verdict === 'exhibited' ? 'row small' : 'warnbox' });
+    if (w.verdict === 'exhibited') {
+      vac.append(el('span', { class: 'label' }, 'witness: '));
+      vac.append(mathProse(w.witness || ''));
+    } else if (w.verdict === 'not_found') {
+      vac.append('No instance satisfying every hypothesis at once was found. ');
+      if (w.conflict) vac.append(mathProse(w.conflict));
+    } else {
+      vac.append('Whether the hypotheses can hold together was judged out of reach from ' +
+                 'the statement alone.');
+    }
+    body.append(vac);
+    for (const key of ['well_posed', 'quantifiers', 'constants']) {
+      const block = result[key];
+      if (!block) continue;
+      body.append(el('div', { class: 'row small' + (block.ok ? ' muted' : '') },
+        `${key.replace('_', '-')}: ${block.ok ? 'clean' : 'SUSPECT'}` +
+        (block.checked ? ' — ' + block.checked : '')));
+      for (const entry of block.constants || []) {
+        body.append(el('div', { class: 'row small muted' }, '  ' + entry));
+      }
+    }
+    for (const finding of result.findings || []) {
+      const box = el('div', { class: 'flag' });
+      box.append(el('div', { class: 'kind' }, `${finding.where} · ${finding.confidence}`));
+      const why = el('div', {}); why.append(mathProse(finding.why)); box.append(why);
+      if (finding.quote) {
+        const q = el('div', { class: 'quote' }); q.append(mathProse(finding.quote)); box.append(q);
+      }
+      body.append(box);
+    }
   } else if (job.kind === 'verify') {
     body.append(el('p', {},
       el('b', {}, result.verdict),
-      ` — ${result.obligations_checked} obligation(s) checked ` +
-      `(${result.obligations_cached} from cache), ${result.panel_ran} panel member(s) answered.`));
+      ` at level ${result.level}.`));
+    body.append(el('div', { class: 'row small muted' }, result.summary || ''));
+    for (const reason of result.reasons || []) {
+      body.append(el('div', { class: 'row small' }, 'flagged because: ' + reason));
+    }
     for (const flag of result.flags || []) {
       const box = el('div', { class: 'flag' });
       box.append(el('div', { class: 'kind' }, flag.kind));
@@ -1261,21 +1426,33 @@ async function frontierSheet() {
   sheet('Frontier', body, [{ label: 'Close', onClick: closeSheet }]);
 }
 
-async function recompileSheet() {
+async function recompileSheet(level) {
+  const chosen = level || 'standard';
   const body = el('div', {});
   body.append(el('div', { class: 'spinner-row' }, 'Working out what it would cost…'));
   sheet('Recompile', body, [{ label: 'Close', onClick: closeSheet }]);
   let plan;
-  try { plan = await api('/api/recompile/plan'); }
+  try { plan = await api('/api/recompile/plan?level=' + encodeURIComponent(chosen)); }
   catch (e) { body.textContent = e.message; return; }
 
   body.textContent = '';
+  // The level picker re-prices as you change it, so the bill for `deep` is
+  // something you see before you agree to it rather than after.
+  const select_ = el('select', {});
+  for (const l of ['quick', 'standard', 'deep']) {
+    const option = el('option', { value: l }, l);
+    if (l === chosen) option.setAttribute('selected', 'selected');
+    select_.append(option);
+  }
+  select_.addEventListener('change', () => recompileSheet(select_.value));
+  body.append(el('label', { class: 'small muted' }, 'Level'), select_);
+  body.append(el('div', { class: 'small muted' }, LEVEL_BLURB[chosen]));
   body.append(el('pre', { class: 'tex' }, plan.text));
   const actions = [{ label: 'Cancel', onClick: closeSheet }];
   if (plan.tasks.length) {
     actions.push({
       label: `Run ${plan.calls} call(s)`, primary: true,
-      onClick: () => { closeSheet(); runJob('recompile', null, {}); },
+      onClick: () => { closeSheet(); runJob('recompile', null, { level: chosen, batch: 1 }); },
     });
   }
   actions.push({
@@ -1435,7 +1612,8 @@ async function boot() {
     if (evt.key === 'Escape') closeSheet();
   });
   document.getElementById('btn-frontier').onclick = guard(frontierSheet);
-  document.getElementById('btn-recompile').onclick = guard(recompileSheet);
+  // Bound through a wrapper: `onclick` would pass the MouseEvent as the level.
+  document.getElementById('btn-recompile').onclick = guard(() => recompileSheet());
   document.getElementById('btn-render').onclick = guard(renderSheet);
   document.getElementById('btn-check').onclick = guard(checkSheet);
   document.getElementById('btn-history').onclick = guard(historySheet);

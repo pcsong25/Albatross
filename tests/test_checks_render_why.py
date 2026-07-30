@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from bp import checks, render, why
+from bp import checks, ops, render, why
 from bp.checks import load_graph
 
 from .conftest import write_node
@@ -206,3 +206,116 @@ def test_shipped_fixture_renders_without_placeholders(fixture_project):
     assert "\\begin{document}" in tex and "\\end{document}" in tex
     assert re.search(r"\(\(\(|\(\(\*", tex) is None  # no unrendered template markers
     assert "gclm.blowup" in tex
+
+
+class TestRenderScrutiny:
+    """The verification record goes into the document.
+
+    Reading the LaTeX has to tell you how much scrutiny each lemma received. A
+    green colour with no provenance is the thing most likely to be over-trusted,
+    and the document is what the user actually reads.
+    """
+
+    def _record(self, level="standard", **overrides):
+        data = {
+            "checked_at": "2026-08-03T14:22:00+00:00",
+            "level": level,
+            "deterministic": {"integrity": "pass", "discharge": "pass"},
+            "ledger": {"claims": 3, "unsourced": 0, "checked": 3},
+            "obligations": {"total": 2, "verified": 2, "flagged": 0, "cached": 1},
+            "whole_proof": {"verifier_a": "no_objection", "verifier_b": "no_objection"},
+            "statement_audit": "pass",
+        }
+        data.update(overrides)
+        return data
+
+    def test_the_level_and_the_counts_are_printed(self, project):
+        write_node(project, "t", target=True, local_status="verified", proof="p")
+        ops.record_verification(project, "t", "verified", record=self._record("deep"))
+        tex = render.document(graph(project), today="2026-01-01")
+        assert "Checked. level deep" in tex
+        assert "3 claim(s), 0 unsourced, 3 checked" in tex
+
+    def test_role_names_are_escaped_not_passed_through(self, project):
+        """`verifier_a` in LaTeX text mode is "Missing $ inserted" and no PDF. The
+        record is entirely generated text, so it is escaped — unlike anything a
+        person wrote, which is LaTeX already."""
+        write_node(project, "t", target=True, local_status="verified", proof="p")
+        ops.record_verification(project, "t", "verified", record=self._record())
+        tex = render.document(graph(project), today="2026-01-01")
+        assert "verifier\\_a=no\\_objection" in tex
+        assert "verifier_a" not in tex
+
+    def test_a_verified_node_with_no_record_says_so_rather_than_implying_one(self, project):
+        write_node(project, "t", target=True, local_status="verified", proof="p")
+        ops.record_verification(project, "t", "verified")
+        tex = render.document(graph(project), today="2026-01-01")
+        assert "No verification record" in tex
+
+    def test_clean_omits_the_record_with_the_rest_of_the_apparatus(self, project):
+        write_node(project, "t", target=True, local_status="verified", proof="p")
+        ops.record_verification(project, "t", "verified", record=self._record())
+        tex = render.document(graph(project), clean=True, today="2026-01-01")
+        assert "Checked." not in tex
+
+    def test_an_unverified_node_gets_no_record_line(self, project):
+        write_node(project, "t", target=True, proof="p")
+        tex = render.document(graph(project), today="2026-01-01")
+        assert "Checked." not in tex
+
+    def test_the_audit_view_names_the_unsourced_claims(self, project):
+        from bp.hash import proof_hash
+
+        write_node(project, "t", target=True, proof="An argument.")
+        g = graph(project)
+        ops.record_ledger(
+            project,
+            "t",
+            [
+                {"id": "c1", "text": "a > 0", "source": {"kind": "literature", "ref": "Smith"}},
+                {"id": "c2", "text": "\\omega \\in C^1", "source": {"kind": "none"}},
+            ],
+            proof_hash(g["t"]),
+        )
+        tex = render.document(graph(project), audit=True, today="2026-01-01")
+        assert "2 load-bearing claim(s), of which 1 unsourced" in tex
+        # Claim text is a math-mode fragment, like a hypothesis `tex`: the renderer
+        # supplies the dollars, or it is "Missing $ inserted" and no PDF.
+        assert "$\\omega \\in C^1$" in tex
+
+    def test_a_fully_sourced_ledger_is_counted_not_listed(self, project):
+        from bp.hash import proof_hash
+
+        write_node(project, "t", target=True, proof="An argument.")
+        g = graph(project)
+        ops.record_ledger(
+            project,
+            "t",
+            [{"id": "c1", "text": "a > 0", "source": {"kind": "literature", "ref": "Smith"}}],
+            proof_hash(g["t"]),
+        )
+        tex = render.document(graph(project), audit=True, today="2026-01-01")
+        assert "1 load-bearing claim(s), each with a named source." in tex
+
+
+def test_the_shipped_fixture_fires_the_ledger_check_on_exactly_one_claim(fixture_project):
+    """Part of the L0 acceptance: the fixture carries a hand-written ledger with a
+    deliberately unsourced claim, and LED001 fires on that claim and nothing else."""
+    report = checks.run(fixture_project)
+    led = [d for d in report.diagnostics if d.code.startswith("LED")]
+    assert [d.code for d in led] == ["LED001"]
+    assert led[0].node == "gclm.blowup"
+    assert "c4" in led[0].message
+
+
+def test_the_shipped_fixture_has_both_shapes_of_verification_record(fixture_project):
+    g, _, ok = load_graph(fixture_project)
+    assert ok
+    assert g["gclm.elb-a"].verification.level == "deep"
+    assert g["gclm.blowup"].verification.level == "standard"
+    # And the record on each agrees with the status the node actually carries.
+    from bp import verification as verification_mod
+
+    for node_id in ("gclm.elb-a", "gclm.blowup"):
+        node = g[node_id]
+        assert verification_mod.implied_status(node.verification) == node.local_status
