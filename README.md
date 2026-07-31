@@ -46,7 +46,7 @@ one you get the `.tex` source and no PDF.
 git clone <this repo> albatross && cd albatross
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
-.venv/bin/python -m pytest -q        # 440 tests, no network, no API key
+.venv/bin/python -m pytest -q        # 598 tests, no network, no API key
 ```
 
 `bp` is then on the venv's path. Either activate the venv or use
@@ -81,6 +81,23 @@ bp agents                        # which model plays which role, and what can ru
 
 ---
 
+## An example to look at first
+
+```bash
+cd examples/gclm
+bp status          # one line per node
+bp check           # two deliberate errors — see the README there
+bp why             # why the target is not proved, in English
+bp render --pdf    # the document, with every gap marked
+```
+
+All deterministic: no key, no network, no model calls. **Read
+[examples/gclm/README.md](examples/gclm/README.md) first** — the mathematics in it is
+illustrative and has never been checked, and some of it is wrong on purpose.
+
+The repository root is not a project, so `bp` run there will tell you it cannot find
+one. That is correct.
+
 ## Five minutes
 
 ```bash
@@ -113,6 +130,8 @@ button, label and colour in the interface.
 
 Plain files. No database, no lock-in, and hand-editing is expected — the writer
 preserves your comments, key order and quote style.
+
+Your project is its own directory, separate from this repository.
 
 ```
 myproject/

@@ -47,10 +47,21 @@ def project(tmp_path: Path) -> Project:
     return p
 
 
+#: The shipped example. It lives under ``examples/`` rather than at the repository
+#: root so that the root is not itself a project — ``bp ui`` there used to open this
+#: fixture as though it were live work, and a fresh clone looked like it shipped
+#: somebody's half-finished paper.
+EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "gclm"
+
+
 @pytest.fixture
 def fixture_project() -> Project:
-    """The real six-node development shipped in ``nodes/``."""
-    return Project(Path(__file__).resolve().parent.parent)
+    """The ten-node gCLM development shipped in ``examples/gclm/``.
+
+    Illustrative and unverified — see its README. Two of its diagnostics are
+    deliberate and are asserted by tests, so "fixing" the fixture breaks them.
+    """
+    return Project(EXAMPLE)
 
 
 # --- L1 helpers ---------------------------------------------------------------

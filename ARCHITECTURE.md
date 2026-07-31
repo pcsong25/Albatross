@@ -173,7 +173,7 @@ a LaTeX document that marks every gap.
 ## 2. Data flow
 
 ```
-nodes/*.md
+nodes/*.md          (in the user's project, not in this repository)
     │  bp/load.py        parse frontmatter (ruamel, comments preserved) + body
     ▼
   Node objects           bp/model.py — validated, typed, still carrying their file

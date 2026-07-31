@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 *.egg-info/
+# setuptools' scratch directory. `pip wheel .` leaves a full copy of the package
+# in here, and it was committed once by accident.
+build/
 
 # Derived output. The LaTeX document is regenerated from the node files on
 # demand and is never the source of truth, so it does not belong in history.

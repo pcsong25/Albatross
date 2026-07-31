@@ -888,3 +888,34 @@ And `--fill` had to write the *resolved* value, not the shipped default. Writing
 default would be a reconfiguration disguised as bookkeeping: the user runs a command
 they think is cosmetic and their whole system moves to another provider. There is now a
 test asserting backend, model and options are all unchanged across a fill.
+
+### The example moves out of the root
+
+The user asked where `nodes/` had come from, having not written it. Fair question, and
+the honest answer is: I did, in an earlier session, as the L0 acceptance fixture — plus
+four nodes the decomposer produced during the L1 and L2 acceptance runs. The commit
+message at the time said why real-looking mathematics rather than filler, and that
+reasoning still holds. What it did not do was say so anywhere a *reader* would see it.
+
+So it is now `examples/gclm/` with a README that opens by saying it is a test fixture and
+not verified mathematics, that about half of it was written by a language model asked to
+write plausible mathematics and the other half by one asked to decompose it, and that two
+of its diagnostics are deliberate and asserted by tests.
+
+The repository root now has no `nodes/`, which means `find_project` refuses there — so
+`bp ui` from the root does nothing, which is correct. Before this it opened the fixture as
+though it were live work, and a fresh clone looked like it shipped somebody's
+half-finished paper.
+
+Guarded in `tests/test_packaging.py`: the root has no `nodes/`, discovery refuses there,
+the example is a project, and its README contains the words that make its status
+unmissable.
+
+Also removed a tracked `build/` directory that `pip wheel` had left during the packaging
+work and that I committed by accident.
+
+```
+pytest -q       598 passed
+bp status       (from the root) error: no nodes/ directory — correct
+bp check        (in examples/gclm) 2 deliberate errors
+```

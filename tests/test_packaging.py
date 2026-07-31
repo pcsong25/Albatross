@@ -129,3 +129,47 @@ class TestShippedConfig:
     def test_it_warns_about_putting_both_verifiers_on_one_family(self):
         text = (REPO / "bp" / "templates" / "bp.yaml").read_text(encoding="utf-8")
         assert "DIFFERENT MODEL FAMILIES" in text.upper()
+
+
+class TestTheRepositoryRootIsNotAProject:
+    """The example used to live at the repository root, which meant `bp ui` there
+    opened it as though it were live work, and a fresh clone looked like it shipped
+    somebody's half-finished paper. Guarded, because moving it back would be easy to
+    do by accident.
+    """
+
+    def test_the_root_has_no_nodes_directory(self):
+        assert not (REPO / "nodes").exists()
+
+    def test_project_discovery_refuses_at_the_root(self):
+        from bp.paths import ProjectNotFound, find_project
+
+        with pytest.raises(ProjectNotFound):
+            find_project(REPO)
+
+    def test_the_example_is_a_project(self):
+        from bp.paths import find_project
+
+        project = find_project(REPO / "examples" / "gclm")
+        assert project.root == REPO / "examples" / "gclm"
+        assert project.nodes_dir.is_dir()
+
+    def test_the_example_says_it_is_unverified(self):
+        """A fixture of plausible-looking mathematics needs to say so where a reader
+        will see it, not only in a commit message."""
+        readme = (REPO / "examples" / "gclm" / "README.md").read_text(encoding="utf-8")
+        lowered = readme.lower()
+        assert "not verified mathematics" in lowered
+        assert "test fixture" in lowered
+        assert "deliberately" in lowered
+
+    def test_the_example_is_not_packaged(self):
+        """It is documentation, not code: it must not land in a wheel."""
+        from pathlib import Path
+
+        import tomllib
+
+        config = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
+        include = config["tool"]["setuptools"]["packages"]["find"]["include"]
+        assert include == ["bp*"]
+        assert not any("example" in pattern for pattern in include)

@@ -1387,3 +1387,43 @@ role's backend, model and options are unchanged across a fill.
 greps `bp/` for `registry.agent("…")` / `config.role("…")` and asserts every name found
 is in `ROLES`. A role resolved by a name nobody can configure is the bug this entry is
 about, and it should not be possible to add another one quietly.
+
+---
+
+## D060 — The example lives under `examples/`, and the repository root is not a project
+
+**Date** 2026-07-30 · **Milestone** L3 (friction log)
+
+The user noticed `nodes/` in the repository and asked, reasonably, where its content had
+come from — they had not written it.
+
+**What it was.** The six-node gCLM development written by Claude as the L0 acceptance
+fixture (`47587f3`), plus four nodes the decomposer produced during the L1 and L2
+acceptance runs. Real-looking mathematics rather than filler, because the renderer's
+output *was* the L0 acceptance gate and filler would not have exposed anything — it did
+in fact expose the YAML-float hash bug on the first run. But it is unverified, some of it
+is probably wrong, and some of it is wrong on purpose.
+
+**Decision.** It moves to `examples/gclm/`, with its `bp.yaml` and its `.bp/` state, and
+gains a README whose first paragraph says it is a test fixture and not verified
+mathematics. The repository root therefore has no `nodes/`, so `find_project` refuses
+there and `bp ui` from the root does nothing.
+
+**Why this matters more than tidiness.** A directory of plausible-looking research
+mathematics, sitting at the root of the tool that renders it, is a confusion hazard aimed
+at exactly the person least able to afford it. `bp ui` from the root opened the fixture as
+though it were live work. And for an open-source release a fresh clone looked like it
+shipped somebody's half-finished paper.
+
+**What is guarded.** `tests/test_packaging.py` asserts the root has no `nodes/`, that
+discovery refuses there, that `examples/gclm` *is* a project, and that its README
+contains the words that make its status unmissable. Moving it back would fail those.
+
+**Also removed:** a tracked `build/` directory, left by `pip wheel` runs during the
+packaging work and committed by accident in `1c3fd64`. Now in `.gitignore`.
+
+**Note on `--replay`.** The example keeps the 38 calls the acceptance runs made, and they
+are worth reading (`bp calls --show <hash>`) — but replay now *misses* on most nodes,
+because the log is keyed on a prompt hash and several prompts have changed since. A miss
+is a loud `ReplayMiss`, not a silent fall-through to the network, which is the intended
+behaviour and is what the README says.
