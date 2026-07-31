@@ -1587,3 +1587,106 @@ render. Rejected: it costs a model call per render and would silently re-bill.
 `templates/paper.tex.j2`, the `writer` role and the endpoints. `preamble.tex.j2`
 would fold back into `document.tex.j2`. Nothing in the deterministic core depends on
 any of it.
+
+---
+
+## D064 — Every edit keeps the text it replaced
+
+**Date** 2026-07-31 · **Milestone** L3 (tuning)
+
+Non-negotiable 3 is *nothing is destroyed*, and it was true of nodes and false of the
+two fields the user actually writes. `ops._edit_section` recorded `chars_before` — a
+character **count**. The previous wording of a statement existed nowhere: not in the
+node file, not in the event log, not in `attempts/`.
+
+Two costs. The obvious one: *what did I just change?* had no answer. The one that
+mattered more: the amender (D065) is asked what an edit implies for the children, and
+that is a much sharper question with the diff in hand than without it.
+
+**Decision.** `bp/history.py`. Every `edit_statement` / `edit_proof` that changes
+anything writes the superseded text to `.bp/history/<node>/<seq>-<section>.tex`, and the
+event records the path. `bp revisions <node>` lists, prints and diffs them.
+`set_hypotheses` records the full before/after list rather than only the ids.
+
+**Alternatives.** (a) The text in the event payload. Rejected: a statement is kilobytes
+of LaTeX, `bp events` becomes unreadable, and the log is meant to be a scannable record
+of *what happened*. The path is in the payload instead. (b) Git the project directory.
+Rejected: it is the user's choice whether their project is a repository, and half of
+them will not have committed since the edit anyway. (c) Snapshot every section. Rejected:
+Notes are append-only already, and frontmatter round-trips.
+
+Empty sections are not snapshotted — the prover writing a first proof is not a loss, and
+a directory of empty files makes the real revisions harder to find. Sequence numbers are
+per section, which means a bare `--show 2` can be ambiguous; the CLI refuses and asks for
+`--section` rather than guessing.
+
+**To reverse.** Delete the module and the call in `_edit_section`. The amender degrades
+to inferring what moved, and says so in its prompt.
+
+---
+
+## D065 — An edited parent is amended, not redecomposed
+
+**Date** 2026-07-31 · **Milestone** L3 (tuning)
+
+The user asked what happens when they edit a statement — *"should I redecompose it,
+hence lose all the current children?"* — and described the case that actually occurs: a
+hypothesis tightened, most of the children still right, small associated fixes needed.
+
+They were right that nothing served this. Editing a parent voids its verification and
+its ancestors', leaves the children alone (correctly — a child does not depend on its
+parent), and the only tool for acting on it was `bp redo`: archive the subtree,
+decompose again, lose every proof underneath.
+
+Worse, **nothing said the decomposition might no longer fit.** A verification records
+`verified_against`, a statement audit records `audited_against`, and `bp check-decomp`
+recorded nothing at all — so "these children were approved against different wording"
+was not a fact the system could state.
+
+**Decision, in two parts.**
+
+*The certificate.* `ops.record_decomposition_check` writes `checked_against` over the
+same dependency set a verification uses (self, children, cross-references, via the now
+shared `hash.certificate_is_stale`). `DEC011` says a decomposition has never been
+checked; `DEC010` says the check was about earlier text. Neither moves a status — the
+check is two judgements about structure, not a verification — and both are recorded
+whether or not problems were found, because a check that ran and found three problems is
+not an unchecked node.
+
+*The role.* `bp amend` / **Amend…**, one call, given the parent, the children, the
+discharge table and the diff of the last edit. It returns `no-change`, `amend` (a
+verdict per child — keep, edit or drop — plus new children, a rewritten reduction and a
+complete `uses` table) or `redecompose`.
+
+**Where the guarantee is.** Exactly where it is everywhere else in this system:
+
+- Every existing child must come back with exactly one verdict. Silence is `AMD001` and
+  a repair round: a lemma nobody mentioned cannot be told apart from a lemma somebody
+  forgot.
+- The proposed table is assembled into a candidate graph and run through the *existing*
+  discharge and children-used checks before anything is written. That is the point and
+  not a formality — what a parent's edit changes **is** what its children can be given,
+  so this is precisely where an inadequate amendment dies.
+
+**Propose, then accept per item.** `amend()` writes only `.bp/amend/<node>.json`;
+`apply_amendment()` takes the item keys the user ticked. The alternative — apply and let
+them read the diff afterwards — was rejected for the reason the proof-reader was
+designed the same way: an agent silently editing a mathematician's theorem is what the
+rest of this system refuses to do, and it would not stop being wrong because it is
+usually right. Partial acceptance is handled honestly rather than cleverly: rejecting a
+`drop` keeps the child *and* its existing `uses` row, so declining one item cannot
+manufacture a `DIS010` the user did not cause; keeping a reduction that cites a lemma
+they unticked genuinely does leave a citation to nothing, and both the sheet (before) and
+the apply result (after) say so.
+
+**Alternatives.** (a) Extend `redo` with a `--keep` flag. Rejected: redo's contract is
+*archive and start again*, and a flag that inverts it is a different operation wearing
+its name. (b) Let the amender edit children's *proofs* too. Rejected: it cannot see
+whether a proof still works, that is the prover's and the verifier's job, and an edited
+statement re-verifies the proof anyway. (c) Reuse the `decomposer` role. Rejected on the
+usual grounds — a role name is configuration; `amender` inherits from `decomposer`, so
+no existing project moves provider.
+
+**To reverse.** Delete `bp/roles/amend.py`, the prompt, the role, the three endpoints and
+the sheet. `checked_against` and `DEC010` stand on their own and are worth keeping
+either way.

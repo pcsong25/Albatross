@@ -1016,3 +1016,69 @@ bp paper --plan --root examples/gclm               10 nodes, 5 calls (unpriced)
 bp paper --pdf   (scripted writer, 2 nodes)        wrote .bp/build/paper.pdf
 bp paper --status   (after one edit)               written before 1 node(s) edited
 ```
+
+### The edit nobody could act on
+
+The user asked two things: what the claim ledger is, and what happens when they edit a
+statement — *"should I redecompose it, hence I will lose all the current children?"*
+They described the case that actually happens: a hypothesis tightened, most of the
+children still right, small associated fixes needed.
+
+Answering the second honestly meant admitting three gaps.
+
+**The previous text was gone.** `_edit_section` recorded `chars_before` — a count. So
+"nothing is destroyed" was true of nodes and false of the two fields the user writes,
+and the most ordinary question after an edit had no answer anywhere.
+
+**The decomposition check left no certificate.** A verification records
+`verified_against`; a statement audit records `audited_against`; `bp check-decomp`
+recorded nothing at all. So after editing a parent, *these children were approved
+against different wording* was not something the system could say. It was the one
+certificate missing, and this is exactly the case it was missing for.
+
+**And the only tool was `bp redo`** — archive the subtree, decompose again, lose every
+proof underneath. For "I tightened a hypothesis" that is the wrong instrument by an
+order of magnitude.
+
+All three are closed. `bp/history.py` snapshots superseded Statement and Proof text
+under `.bp/history/`, and `bp revisions` lists, prints and diffs it.
+`ops.record_decomposition_check` writes `checked_against` over the same set a
+verification covers, with `DEC010`/`DEC011` reporting it and neither moving a status.
+And `bp amend` / **Amend…** is one call that reads the parent as it now stands, the
+children as they stand, and the diff of the edit, and returns `no-change`, `amend`
+(keep/edit/drop per child, new children, a rewritten reduction, a complete `uses`
+table) or `redecompose`.
+
+The guarantee sits where it always does. Every existing child must come back with
+exactly one verdict — silence is `AMD001` and a repair round — and the proposed
+discharge table is assembled into a candidate graph and run through the *existing*
+discharge check before anything is written. That last part is the whole mechanism
+rather than a formality: what a parent's edit changes **is** what its children can be
+given, so an inadequate amendment dies at `DIS011` for free, exactly as an inadequate
+decomposition does.
+
+Nothing is applied that was not ticked. The proposal goes to `.bp/amend/<node>.json`
+with a per-item diff; applying takes the keys the user accepted. Partial acceptance is
+honest rather than clever — rejecting a `drop` keeps the child and its existing `uses`
+row so declining one item cannot manufacture a `DIS010` nobody caused, while keeping a
+reduction that cites a lemma you unticked genuinely does dangle, and the sheet warns
+before you apply as well as after.
+
+Two things found by driving the browser rather than by the tests: the conflict warning
+was originally appended below the notes, the diagnostics and the hint box — a warning
+below the fold, in response to a click two screens up — and the proposal cards used
+`.flag`, which is objection styling, so every proposed change looked like a problem.
+
+```
+pytest                                             703 passed
+bp revisions t --show 2 --diff                     the two versions, coloured
+bp amend t   (scripted, 2 children)                1 item, nothing written
+bp amend t --apply                                 edited t.elb, subtree copied
+bp check                                           DEC010 on t, as it should be
+```
+
+The claim-ledger half of the question needed no code: `bp/ledger.py` and
+`roles/prompts/extract.md` were already the answer, and `GUIDE.md` §8a already
+explained it. Worth noting anyway that the user's own project had a live `LED006` —
+a claim resting on a computation with no named artifact — which is the check doing
+precisely what it is for.

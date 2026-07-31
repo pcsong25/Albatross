@@ -66,6 +66,7 @@ ROLES = (
     "proofreader",
     "prover",
     "writer",
+    "amender",
 )
 
 #: Published list prices, US dollars per million tokens. Overridable in
@@ -98,6 +99,9 @@ DEFAULT_ROLES: dict[str, dict[str, Any]] = {
     # prose per section: the strongest model available, and the one role a user
     # might reasonably point at a subscription CLI because it is run rarely.
     "writer": {"backend": "claude_api", "model": "claude-opus-5"},
+    # Adapting an existing decomposition to an edited parent. Decomposition-shaped
+    # judgement, so the decomposer's tier.
+    "amender": {"backend": "claude_api", "model": "claude-opus-5"},
 }
 
 
@@ -129,6 +133,9 @@ ROLE_INHERITS: dict[str, tuple[str, ...]] = {
     # Writing mathematical prose from a development is the decomposer's job in a
     # different direction, so it is the closest configured role.
     "writer": ("decomposer", "verifier_a", "checker"),
+    # It proposes children, a reduction and a complete discharge table, which is the
+    # decomposer's job over a smaller area.
+    "amender": ("decomposer", "checker", "verifier_a"),
 }
 
 
@@ -229,6 +236,7 @@ ROLE_NOTES: dict[str, str] = {
     "proofreader": "Syntax-only corrections when you save a statement. Small and frequent.",
     "prover": "Writes proofs for routine and standard leaves. Never sets a status.",
     "writer": "The optional readable paper: one call for the outline, then one per section. Run rarely, so it can afford the best model you have.",
+    "amender": "Adapts an existing decomposition to an edited parent: keep/edit/drop per child, one call. The cheap alternative to redecomposing.",
 }
 
 

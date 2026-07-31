@@ -15,9 +15,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import discharge as discharge_mod
+from . import hash as hash_mod
 from . import ledger as ledger_mod
 from . import xref as xref_mod
-from .diagnostics import Diagnostic, err, sort_diagnostics, warn
+from .diagnostics import Diagnostic, err, info, sort_diagnostics, warn
 from .graph import Graph, GraphError
 from .load import computed_in_memory, computed_on_disk, load_nodes
 from .model import PROOF, STATEMENT, Node, cites, known_frontmatter_keys
@@ -175,6 +176,52 @@ def target_examined(graph: Graph) -> list[Diagnostic]:
     return d
 
 
+def decomposition_checked(node: Node, graph: Graph) -> list[Diagnostic]:
+    """``DEC010``–``DEC011``: is the decomposition check current?
+
+    This is the certificate that was missing. Verification and the statement audit
+    both recorded what they had seen, so both can say when they have gone out of
+    date. ``bp check-decomp`` recorded nothing at all — so after editing a parent's
+    statement, nothing anywhere could say that its children had been approved
+    against different wording, and the user's only options were to remember or to
+    redecompose from scratch.
+
+    Neither code moves a status. A decomposition check is two judgements about
+    structure, not a verification; what it earns is a line telling the user to re-run
+    it — or to run `bp amend`, which is the cheaper answer when the parent moved and
+    the children are mostly still right.
+    """
+    d: list[Diagnostic] = []
+    if not node.children:
+        return d
+    if not node.checked_against:
+        d.append(
+            info(
+                "DEC011",
+                node,
+                f"{node.id} has {len(node.children)} child(ren) and its decomposition "
+                "has never been checked",
+                hint=f"`bp check-decomp {node.id}` asks two questions: does the "
+                "reduction establish this node, and is any child a restatement of it. "
+                "Two calls, and they catch the failures no structural check can see.",
+            )
+        )
+    elif hash_mod.decomposition_is_stale(node, graph):
+        d.append(
+            warn(
+                "DEC010",
+                node,
+                f"{node.id}'s decomposition was checked against an earlier version of "
+                "this statement or of one of its children",
+                hint=f"`bp amend {node.id}` reads the current statement against the "
+                "children you already have and proposes the minimal changes — much "
+                "cheaper than `bp redo`, and it keeps their proofs. `bp check-decomp` "
+                "re-runs the two questions once the children are right.",
+            )
+        )
+    return d
+
+
 def schema_hygiene(node: Node) -> list[Diagnostic]:
     """``SCH002``/``SCH003`` — cheap protection for hand-edited files."""
     d: list[Diagnostic] = []
@@ -310,6 +357,10 @@ def for_node(graph: Graph, node: Node) -> dict[str, list[Diagnostic]]:
         "ledger": ledger_mod.check_ledger(node),
         "xref": xref,
         "latex": latex_text(node),
+        # Deliberately NOT here. `for_node` is what the verification record's
+        # `deterministic` block is built from, and the DEC family is about whether a
+        # *judgement* is current rather than about the proof — neither code is ever an
+        # error, so it could only ever add a permanent `pass` to every record.
     }
 
 
@@ -325,6 +376,7 @@ def run(project: Project) -> Report:
         diagnostics.extend(children_used(node))
         diagnostics.extend(discharge_mod.check_discharge(node, graph))
         diagnostics.extend(ledger_mod.check_ledger(node))
+        diagnostics.extend(decomposition_checked(node, graph))
 
     # Whole-graph, after the per-node pass: a reference and its label are in
     # different files, so neither node alone can tell whether the pair is sound.

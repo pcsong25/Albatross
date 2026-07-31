@@ -408,6 +408,132 @@ def register(app: typer.Typer) -> None:
         console.print(Text(result.describe()))
         _print_spend(registry)
 
+    @app.command("amend")
+    def amend_cmd(
+        node_id: str,
+        root: Optional[Path] = typer.Option(None, "--root"),
+        replay: bool = typer.Option(False, "--replay"),
+        hint: Optional[str] = typer.Option(
+            None, "--hint", "-h", help="what you changed and why, in your words"
+        ),
+        show: bool = typer.Option(
+            False, "--show", help="re-print the stored proposal; makes no call"
+        ),
+        apply_it: bool = typer.Option(
+            False, "--apply", help="apply the stored proposal. Makes no call"
+        ),
+        only: Optional[str] = typer.Option(
+            None,
+            "--only",
+            help="with --apply: a comma-separated list of item keys to accept, "
+            "e.g. child:thm.elb,reduction",
+        ),
+    ) -> None:
+        """Adapt an existing decomposition to an edited parent, minimally.
+
+        The cheap alternative to `bp redo`. It reads the parent as it now stands, the
+        children as they stand, and the diff of your last edit, and proposes one
+        verdict per child — keep, edit or drop — plus any new lemma the new statement
+        needs, a rewritten reduction, and a complete discharge table. That table goes
+        through the same deterministic gate a decomposition does, so an amendment that
+        leaves a hypothesis unsourced is rejected before you see it.
+
+        **It writes nothing.** Review the proposal, then `--apply` it, or
+        `--apply --only <keys>` to take some of it. Accepting an edit invalidates that
+        child's verification, which is correct; its proof is kept, and the subtree is
+        copied to `attempts/` first.
+        """
+        from .roles import amend as amend_role
+
+        project = _project(root)
+
+        if show or apply_it:
+            try:
+                proposal = amend_role.load_proposal(project, node_id)
+            except amend_role.ProposalUnreadable as exc:
+                err_console.print(f"[bold red]error[/] {exc}")
+                raise typer.Exit(code=1)
+            if proposal is None:
+                err_console.print(
+                    f"[bold red]error[/] no amendment has been proposed for {node_id}. "
+                    f"Run `bp amend {node_id}` first — reviewing it before applying is "
+                    "the point."
+                )
+                raise typer.Exit(code=1)
+            if show:
+                _print_proposal(proposal)
+                return
+            keys = (
+                [k.strip() for k in only.split(",") if k.strip()] if only else None
+            )
+            result = _run(amend_role.apply_amendment, project, node_id, keys)
+            console.print(Text(amend_role.summarise_apply(result)))
+            raise typer.Exit(code=0 if result.clean else 1)
+
+        registry = _registry(root, replay)
+        report = _run(
+            amend_role.amend, project, node_id, registry=registry, hint=hint
+        )
+        console.print(Text(amend_role.summarise(report)))
+        if report.proposal is not None and report.proposal.items:
+            console.print()
+            _print_proposal(report.proposal, summary=False)
+        _print_spend(registry)
+        raise typer.Exit(code=0 if report.clean else 1)
+
+    def _print_proposal(proposal, summary: bool = True) -> None:
+        """The diffs, so a terminal review is a real review."""
+        import difflib
+
+        if summary:
+            console.print(Text(f"{proposal.node}: {proposal.verdict}"))
+            console.print(Text(f"  {proposal.assessment}"))
+            console.print(f"[dim]proposed {proposal.proposed_at}[/]")
+            console.print()
+        for item in proposal.items:
+            console.print(Text(f"[{item.key}] {item.kind} — {item.node}", style="bold"))
+            if item.why:
+                console.print(Text(f"  {item.why}", style="dim"))
+            if item.kind == "drop":
+                console.print(Text("  would be archived. Its current statement:"))
+                console.print(Text("  " + " ".join(item.before.split())[:300], style="red"))
+            else:
+                for line in difflib.unified_diff(
+                    item.before.splitlines(),
+                    item.after.splitlines(),
+                    fromfile="now",
+                    tofile="proposed",
+                    lineterm="",
+                ):
+                    style = ""
+                    if line.startswith("+") and not line.startswith("+++"):
+                        style = "green"
+                    elif line.startswith("-") and not line.startswith("---"):
+                        style = "red"
+                    elif line.startswith("@@"):
+                        style = "cyan"
+                    console.print(Text("  " + line, style=style))
+            if item.hypotheses_before or item.hypotheses_after:
+                before = {h["id"]: h.get("tex", "") for h in item.hypotheses_before}
+                after = {h["id"]: h.get("tex", "") for h in item.hypotheses_after}
+                for hid in sorted(set(before) | set(after)):
+                    if before.get(hid) == after.get(hid):
+                        continue
+                    console.print(
+                        Text(f"  {hid}: {before.get(hid, '(none)')}", style="red")
+                    )
+                    console.print(
+                        Text(f"  {hid}: {after.get(hid, '(removed)')}", style="green")
+                    )
+            console.print()
+        if proposal.items:
+            console.print(
+                f"[dim]`bp amend {proposal.node} --apply` takes all of these; "
+                "`--apply --only "
+                + ",".join(proposal.keys[:2])
+                + "` takes some.[/]"
+            )
+
     @app.command("paper")
     def paper_cmd(
         root: Optional[Path] = typer.Option(None, "--root"),

@@ -102,23 +102,25 @@ def xref_dependencies(node: Node, graph) -> dict[str, str]:
     return out
 
 
-def is_stale(node: Node, graph) -> bool:
-    """True when the node's verification certificate no longer matches reality.
+def certificate_is_stale(cert: dict[str, str], node: Node, graph) -> bool:
+    """Has anything a certificate was taken over moved since?
 
-    ``verified_against`` records, at the moment verification succeeded, this
-    node's own statement hash under the key ``self``, each child's hash under its
-    id, and each cross-referenced node's hash under ``xref:<id>``. If any of those
-    moved, the verification was about a different claim than the one now written
-    down.
+    A certificate records this node's own statement hash under ``self``, each
+    child's hash under its id, and each cross-referenced node's hash under
+    ``xref:<id>``. If any of those moved, whatever was certified was about
+    different text.
 
-    A node that has never been verified is not stale — it is merely unverified,
-    which the sweep reports differently and which reads very differently to a
-    user.
+    Shared by the two certificates that exist — a verification
+    (``verified_against``) and a decomposition check (``checked_against``) — because
+    they are taken over the same dependency set, and two implementations of this
+    would be two chances to under-invalidate.
+
+    An empty certificate is not stale: it means the thing never happened, which the
+    callers report differently and which reads very differently to a user.
     """
-    va = node.verified_against
-    if not va:
+    if not cert:
         return False
-    if va.get("self") != node.statement_hash:
+    if cert.get("self") != node.statement_hash:
         return True
     for c in node.children:
         child = graph.get(c)
@@ -126,9 +128,9 @@ def is_stale(node: Node, graph) -> bool:
             # A dangling child is an integrity error reported elsewhere. Treat
             # the certificate as void rather than silently honouring it.
             return True
-        if va.get(c) != child.statement_hash:
+        if cert.get(c) != child.statement_hash:
             return True
-    for key, recorded in va.items():
+    for key, recorded in cert.items():
         if not key.startswith(XREF_PREFIX):
             continue
         other = graph.get(key[len(XREF_PREFIX) :])
@@ -140,6 +142,25 @@ def is_stale(node: Node, graph) -> bool:
         if recorded != other.statement_hash:
             return True
     return False
+
+
+def is_stale(node: Node, graph) -> bool:
+    """True when the node's *verification* certificate no longer matches reality.
+
+    A node that has never been verified is not stale — it is merely unverified,
+    which the sweep reports differently.
+    """
+    return certificate_is_stale(node.verified_against, node, graph)
+
+
+def decomposition_is_stale(node: Node, graph) -> bool:
+    """True when the last decomposition check was about different text.
+
+    Unlike :func:`is_stale` this never moves a status: a decomposition check is a
+    pair of judgements about structure, not a verification, so its going out of date
+    is a ``DEC010`` warning telling the user to re-run it.
+    """
+    return certificate_is_stale(node.checked_against, node, graph)
 
 
 def certificate(node: Node, graph) -> dict[str, str]:

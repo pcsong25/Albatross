@@ -259,10 +259,22 @@ def build_prompt(
 
 def assign_ids(graph: Graph, node: Node, decomposition: Decomposition) -> dict[str, str]:
     """Map each proposed slug to a project-unique node id."""
+    return assign_ids_for(graph, node, decomposition.children)
+
+
+def assign_ids_for(
+    graph: Graph, node: Node, proposed: list[ProposedChild]
+) -> dict[str, str]:
+    """The same, for a bare list of proposed children.
+
+    The amender proposes new children alongside verdicts on existing ones, so it has
+    no ``Decomposition`` to hand — and naming a project-unique id is exactly the same
+    problem there.
+    """
     prefix = node.id.split(".")[0] if "." in node.id else node.id
     taken = set(graph.nodes)
     mapping: dict[str, str] = {}
-    for child in decomposition.children:
+    for child in proposed:
         slug = child.slug.strip().lower()
         if not SLUG_RE.match(slug):
             slug = re.sub(r"[^a-z0-9-]+", "-", slug).strip("-") or "lemma"
@@ -276,7 +288,7 @@ def assign_ids(graph: Graph, node: Node, decomposition: Decomposition) -> dict[s
     return mapping
 
 
-def _child_node(child: ProposedChild, node_id: str) -> Node:
+def child_node(child: ProposedChild, node_id: str) -> Node:
     body = (
         f"## Statement\n\n{child.statement.strip()}\n\n"
         f"## Proof\n\n\n\n## Notes\n\n{child.notes.strip()}\n"
@@ -329,7 +341,7 @@ def candidate_graph(
     event log and out of the user's ``nodes/`` directory.
     """
     children = [
-        _child_node(child, ids[child.slug]) for child in decomposition.children
+        child_node(child, ids[child.slug]) for child in decomposition.children
     ]
     parent = node.model_copy(deep=True)
     parent.children = [ids[c.slug] for c in decomposition.children]
@@ -534,7 +546,7 @@ def _apply(
     ops.edit_proof(
         project,
         node_id,
-        _resolve_slugs(decomposition.reduction_proof, ids),
+        resolve_slugs(decomposition.reduction_proof, ids),
         actor="decomposer",
     )
     if decomposition.strategy.strip():
@@ -554,7 +566,7 @@ def _apply(
         ops.add_note(project, node_id, f"Expanded with hint: {hint.strip()}")
 
 
-def _resolve_slugs(proof: str, ids: dict[str, str]) -> str:
+def resolve_slugs(proof: str, ids: dict[str, str]) -> str:
     for slug, node_id in sorted(ids.items(), key=lambda kv: -len(kv[0])):
         proof = proof.replace(f"`{slug}`", f"`{node_id}`")
         proof = re.sub(
@@ -655,6 +667,10 @@ def summarise(result: ExpandResult) -> str:
 
 __all__ = [
     "Decomposition",
+    "assign_ids",
+    "assign_ids_for",
+    "child_node",
+    "resolve_slugs",
     "statement_errors",
     "ExpandResult",
     "HypothesisSpec",

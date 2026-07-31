@@ -24,6 +24,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .. import checks, compile as compile_mod, events as events_mod, frontier, ops
+from .. import hash as hash_mod
+from .. import history as history_mod
 from .. import ledger as ledger_mod
 from .. import paper as paper_mod
 from .. import recompile as recompile_mod
@@ -37,6 +39,7 @@ from ..discharge import obligations_for
 from ..graph import Graph
 from ..model import Node
 from ..paths import Project
+from ..roles import amend as amend_role
 from ..roles import audit as audit_role
 from ..roles import check as check_role
 from ..roles import decompose as decompose_role
@@ -62,7 +65,8 @@ STATIC = Path(__file__).parent / "static"
 #: 3  labels / refs / reference_obligations / audited_against (citations)
 #: 4  /api/verify/plan — the bill for a node, and confirm_stopped on a verify
 #: 5  /api/paper — the optional agent-written exposition, built on request
-API_VERSION = 5
+#: 6  checked_against / decomposition_stale on a node, and /api/node/<id>/amend
+API_VERSION = 6
 
 #: pdflatex writes into a shared build directory, so two compiles at once
 #: interleave and a `FileResponse` can stream a file being rewritten. Module-level
@@ -130,6 +134,22 @@ class RecompileBody(BaseModel):
     batch: int = 1
 
 
+class AmendBody(BaseModel):
+    """What *Amend* sends: the user's own account of what they changed."""
+
+    hint: str | None = None
+
+
+class ApplyAmendmentBody(BaseModel):
+    """Which items of the stored proposal the mathematician accepted.
+
+    ``None`` means all of them. An empty list is not the same thing and is honoured:
+    it applies nothing, which is what unticking every box means.
+    """
+
+    accept: list[str] | None = None
+
+
 class PaperBody(BaseModel):
     """What the *Write the paper* button sends. Both fields are the user's."""
 
@@ -169,6 +189,14 @@ def node_detail(graph: Graph, node: Node) -> dict[str, Any]:
         "notes": node.notes_section,
         "statement_hash": node.statement_hash,
         "verified_against": dict(node.verified_against),
+        # The decomposition check's own certificate, and whether it is current. The
+        # panel needs both: "never checked" and "checked against different wording"
+        # want different words and different buttons.
+        "checked_against": dict(node.checked_against),
+        "decomposition_stale": bool(
+            node.children and node.checked_against
+            and hash_mod.decomposition_is_stale(node, graph)
+        ),
         "parents": graph.parents(node.id),
         "hypotheses": [h.model_dump() for h in node.hypotheses],
         "uses": {
@@ -576,6 +604,121 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
                 if d.severity == "error"
             ],
         }
+
+    # --- amendment -----------------------------------------------------------
+    #
+    # Three endpoints, and only the middle one costs anything. Proposing is a role
+    # call and goes to the job runner; reading the proposal and applying it are
+    # ordinary synchronous work, because the judgement has already been bought and
+    # applying it is just `ops` calls.
+
+    @app.get("/api/node/{node_id}/amend")
+    def api_amend_proposal(node_id: str) -> dict[str, Any]:
+        """The stored amendment proposal for this node, if there is one.
+
+        ``current`` is the load-bearing field. A proposal made before the parent moved
+        again is a judgement about a different graph, so the page must not offer to
+        apply it — and `apply_amendment` refuses it anyway.
+        """
+        graph = load()
+        node = graph.get(node_id)
+        if node is None:
+            raise HTTPException(status_code=404, detail=f"no node {node_id!r}")
+        try:
+            proposal = amend_role.load_proposal(project, node_id)
+        except amend_role.ProposalUnreadable as exc:
+            return {"exists": False, "error": str(exc)}
+        if proposal is None:
+            return {"exists": False, "error": ""}
+        return {
+            "exists": True,
+            "error": "",
+            "node": proposal.node,
+            "verdict": proposal.verdict,
+            "assessment": proposal.assessment,
+            "notes": proposal.notes,
+            "proposed_at": proposal.proposed_at,
+            "calls": proposal.calls,
+            "current": amend_role.is_current(proposal, node, graph),
+            "kept": [
+                c.id for c in proposal.amendment.children if c.action == "keep"
+            ],
+            "items": [i.model_dump() for i in proposal.items],
+            "diagnostics": [d.model_dump() for d in proposal.diagnostics],
+        }
+
+    @app.post("/api/jobs/amend/{node_id}")
+    def api_amend(node_id: str, body: AmendBody | None = None) -> dict[str, Any]:
+        """Propose an amendment. Writes no node file — only the proposal."""
+        refuse_if_busy(node_id)
+        hint = (body.hint if body else None) or None
+
+        def work(job: jobs_mod.Job) -> dict[str, Any]:
+            report = amend_role.amend(
+                project, node_id, registry=registry_for(job), hint=hint
+            )
+            proposal = report.proposal
+            return {
+                "verdict": report.verdict,
+                "clean": report.clean,
+                "rounds": report.rounds,
+                "assessment": proposal.assessment if proposal else "",
+                "notes": proposal.notes if proposal else "",
+                "items": [i.model_dump() for i in report.items],
+                "kept": [
+                    c.id
+                    for c in (proposal.amendment.children if proposal else [])
+                    if c.action == "keep"
+                ],
+                "diagnostics": [d.model_dump() for d in report.diagnostics],
+            }
+
+        return runner.submit("amend", node_id, work).as_dict()
+
+    @app.post("/api/node/{node_id}/amend/apply")
+    def api_amend_apply(
+        node_id: str, body: ApplyAmendmentBody | None = None
+    ) -> dict[str, Any]:
+        """Apply the accepted items. No model call: the judgement is already bought."""
+        refuse_if_busy(node_id)
+        accept = body.accept if body else None
+        result = mutate(amend_role.apply_amendment, project, node_id, accept)
+        return {
+            "ok": True,
+            "applied": result.applied,
+            "rejected": result.rejected,
+            "edited": result.edited,
+            "dropped": result.dropped,
+            "added": result.added,
+            "reduction": result.reduction,
+            "archived_to": str(result.archived_to) if result.archived_to else None,
+            "clean": result.clean,
+            "diagnostics": [d.model_dump() for d in result.diagnostics],
+        }
+
+    @app.get("/api/node/{node_id}/revisions")
+    def api_revisions(node_id: str) -> dict[str, Any]:
+        """Superseded versions of this node's statement and proof.
+
+        Cheap, and the reason `bp/history.py` exists: "nothing is destroyed" was true
+        of nodes and false of the two fields the user writes.
+        """
+        graph = load()
+        node = graph.get(node_id)
+        if node is None:
+            raise HTTPException(status_code=404, detail=f"no node {node_id!r}")
+        out = []
+        for rev in history_mod.revisions(project, node_id):
+            out.append(
+                {
+                    "seq": rev.seq,
+                    "section": rev.section.lower(),
+                    "saved_at": rev.saved_at,
+                    "text": rev.text,
+                    "current": node.section(rev.section),
+                }
+            )
+        return {"node": node_id, "revisions": out}
 
     # --- the paper -----------------------------------------------------------
     #

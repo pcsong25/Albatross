@@ -190,6 +190,18 @@ select { font: inherit; font-size: 13px; padding: 5px; }
   border-left: 2px solid var(--rule); padding-left: 8px; margin-top: 5px;
 }
 
+.proposal {
+  border-left: 3px solid var(--rule); background: #fbfaf8;
+  padding: 8px 11px; margin: 8px 0; font-size: 13.5px; border-radius: 0 5px 5px 0;
+}
+.proposal.accepted { border-left-color: var(--proved); }
+.proposal .quote {
+  font-family: Georgia, serif; font-style: italic; color: #555;
+  border-left: 2px solid var(--rule); padding-left: 8px; margin-top: 5px;
+}
+.proposal .label { color: var(--dim); font-size: 11.5px; text-transform: uppercase;
+  letter-spacing: 0.05em; margin-top: 6px; }
+
 .whychain { font-size: 14px; }
 .whychain .line { margin: 4px 0; }
 

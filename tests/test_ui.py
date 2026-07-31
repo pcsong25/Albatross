@@ -906,6 +906,123 @@ class TestLabelsEndpoint:
         assert [x["name"] for x in detail["refs"]] == ["eq:a"]
 
 
+class TestAmend:
+    """Amend, through HTTP. The property under test is that applying is *selective*:
+    an agent rewriting a mathematician's lemma has to be something they ticked."""
+
+    def _patch(self, monkeypatch, project, **responses):
+        import bp.ui.app as app_mod
+
+        def fake(project_arg, replay=False, observer=None):
+            registry = scripted_registry(project, **responses)
+            registry.observer = observer
+            return registry
+
+        monkeypatch.setattr(app_mod, "Registry", fake)
+
+    AMENDMENT = {
+        "verdict": "amend",
+        "assessment": "The parent's hypothesis moved, so Lemma A tightens.",
+        "children": [
+            {
+                "id": "a",
+                "action": "edit",
+                "why": "the parent now assumes more, so H1 tightens",
+                "statement": "Lemma A, for $s > 3/2$.",
+                "hypotheses": [{"id": "H1", "tex": "s > 3/2"}],
+            },
+            {"id": "b", "action": "keep"},
+        ],
+        "new_children": [],
+        "reduction_proof": "",
+        "reduction_changed": False,
+        "uses": {
+            "a": {"applied_to": "x", "discharges": {"H1": "hypothesis:H1"}},
+            "b": {"applied_to": "y", "discharges": {}},
+        },
+        "notes": "",
+    }
+
+    def test_a_node_reports_whether_its_decomposition_check_is_current(
+        self, client, project
+    ):
+        small(project)
+        detail = client.get("/api/node/t").json()
+        assert detail["checked_against"] == {}
+        assert detail["decomposition_stale"] is False
+
+        ops.record_decomposition_check(project, "t")
+        assert client.get("/api/node/t").json()["checked_against"]
+
+        client.post("/api/node/t/statement", json={"text": "The theorem, restated."})
+        assert client.get("/api/node/t").json()["decomposition_stale"] is True
+
+    def test_no_proposal_yet_says_so_rather_than_erroring(self, client, project):
+        small(project)
+        assert client.get("/api/node/t/amend").json() == {"exists": False, "error": ""}
+        assert client.get("/api/node/nope/amend").status_code == 404
+
+    def test_proposing_is_a_job_and_writes_no_node(self, client, project, monkeypatch):
+        small(project)
+        before = {p.name: p.read_text() for p in project.nodes_dir.glob("*.md")}
+        self._patch(monkeypatch, project, amender=[json_reply(self.AMENDMENT)])
+        started = client.post("/api/jobs/amend/t", json={"hint": "tightened s"}).json()
+        job = _wait(client, started["id"])
+        assert job["status"] == "done", job.get("error")
+        assert job["result"]["verdict"] == "amend"
+        assert [i["key"] for i in job["result"]["items"]] == ["child:a"]
+        assert job["result"]["kept"] == ["b"]
+        assert {p.name: p.read_text() for p in project.nodes_dir.glob("*.md")} == before
+
+        proposal = client.get("/api/node/t/amend").json()
+        assert proposal["exists"] and proposal["current"]
+        assert proposal["items"][0]["before"].startswith("Lemma A")
+
+    def test_applying_nothing_applies_nothing(self, client, project, monkeypatch):
+        """An empty list is not "all of them" — it is what unticking every box means."""
+        small(project)
+        self._patch(monkeypatch, project, amender=[json_reply(self.AMENDMENT)])
+        _wait(client, client.post("/api/jobs/amend/t", json={}).json()["id"])
+        result = client.post("/api/node/t/amend/apply", json={"accept": []}).json()
+        assert result["applied"] == []
+        assert result["rejected"] == ["child:a"]
+        assert graph_of(project)["a"].statement_section.strip() == "Lemma A."
+
+    def test_applying_a_selected_item_edits_only_that_child(
+        self, client, project, monkeypatch
+    ):
+        small(project)
+        self._patch(monkeypatch, project, amender=[json_reply(self.AMENDMENT)])
+        _wait(client, client.post("/api/jobs/amend/t", json={}).json()["id"])
+        result = client.post(
+            "/api/node/t/amend/apply", json={"accept": ["child:a"]}
+        ).json()
+        assert result["edited"] == ["a"]
+        assert result["archived_to"]
+        graph = graph_of(project)
+        assert "3/2" in graph["a"].statement_section
+        assert graph["b"].statement_section.strip() == "Lemma B."
+
+    def test_applying_a_stale_proposal_is_a_400_not_a_500(
+        self, client, project, monkeypatch
+    ):
+        small(project)
+        self._patch(monkeypatch, project, amender=[json_reply(self.AMENDMENT)])
+        _wait(client, client.post("/api/jobs/amend/t", json={}).json()["id"])
+        client.post("/api/node/t/statement", json={"text": "Different again."})
+        response = client.post("/api/node/t/amend/apply", json={"accept": ["child:a"]})
+        assert response.status_code == 400
+        assert "changed since" in response.json()["detail"]
+
+    def test_revisions_are_readable_from_the_browser(self, client, project):
+        small(project)
+        client.post("/api/node/a/statement", json={"text": "Lemma A, restated."})
+        data = client.get("/api/node/a/revisions").json()
+        assert [r["section"] for r in data["revisions"]] == ["statement"]
+        assert data["revisions"][0]["text"].strip() == "Lemma A."
+        assert data["revisions"][0]["current"].strip() == "Lemma A, restated."
+
+
 class TestPaper:
     """The optional exposition, through HTTP.
 

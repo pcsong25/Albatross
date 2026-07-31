@@ -41,7 +41,7 @@ COMPUTED_FIELDS = frozenset(
 #: in particular that no role may set ``local_status``, which is *derived* from
 #: ``verification`` by :mod:`bp.verification`.
 VERIFICATION_FIELDS = frozenset(
-    {"verified_against", "verification", "audited_against"}
+    {"verified_against", "verification", "audited_against", "checked_against"}
 )
 
 #: The claim ledger. Produced by the extractor role, audited deterministically by
@@ -359,6 +359,18 @@ class Node(BaseModel):
     #: has examined is the hole this closes, and the target theorem was the node it
     #: mattered for most — nothing ever looked at it.
     audited_against: str | None = None
+    #: What the *decomposition* was last checked against, written by
+    #: :func:`bp.ops.record_decomposition_check`. Same shape as
+    #: ``verified_against`` — ``self``, each child, each cross-reference — because
+    #: the checker's two questions are about exactly that set: edit the parent's
+    #: statement or a child's and "does the reduction establish the parent" is a
+    #: question about different text.
+    #:
+    #: It exists because it was the one certificate missing. A verification and a
+    #: statement audit both recorded what they had seen; `bp check-decomp` recorded
+    #: nothing at all, so after editing a parent nothing anywhere could say that its
+    #: children had been approved against different wording.
+    checked_against: dict[str, str] = Field(default_factory=dict)
     #: The claim ledger, and the hash of the proof text it was extracted from.
     #: When they disagree the ledger describes an earlier proof, which is
     #: ``LED100``.
@@ -388,6 +400,7 @@ class Node(BaseModel):
 
     @field_validator(
         "statement_hash", "verified_against", "claims_of", "audited_against",
+        "checked_against",
         mode="before",
     )
     @classmethod

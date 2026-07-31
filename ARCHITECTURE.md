@@ -1147,6 +1147,89 @@ run first — a floor, since the outline decides the section count.
 
 ---
 
+## 9c. Editing a statement: what moves, and the amender
+
+Editing a statement is the operation with a blast radius, and until this round the
+system's account of it was incomplete in three ways. All three are now closed.
+
+**What has always been right.** `ops.edit_statement` moves the statement hash, which
+voids this node's verification certificate and every certificate of a node that
+*cites* it — `ops.stale_radius` walks that set, and the event payload carries it so
+the interface can show the damage before committing. The **children are untouched**,
+correctly: a child does not depend on its parent, and a child's proof that drew on
+what the parent asserts is the circular-citation objection (§6c). The structural
+checks re-run from the files every time, so a hypothesis the children's discharges
+referenced and which no longer exists is `DIS013`, and a child that gains one is
+`DIS011`.
+
+**What was missing: the previous text.** `_edit_section` recorded `chars_before`, a
+count. "Nothing is destroyed" was true of nodes — archiving, `attempts/`, an
+append-only log — and false of the two fields the user actually writes. `bp/history.py`
+now snapshots the superseded text of the Statement and Proof sections under
+`.bp/history/<node>/<seq>-<section>.tex` on every edit that changes anything, and the
+event records the path. `bp revisions <node>` lists them, `--show N` prints one,
+`--show N --diff` compares it with the current text. Empty sections are not
+snapshotted, so the prover writing a first proof leaves no residue.
+`ops.set_hypotheses` records the full before/after list rather than only the ids.
+
+**What was missing: a certificate on the decomposition check.** A verification records
+`verified_against`; a statement audit records `audited_against`; `bp check-decomp`
+recorded *nothing*. So after editing a parent, nothing anywhere could say its children
+had been approved against different wording. `ops.record_decomposition_check` now
+writes `checked_against`, a certificate over the same set a verification uses — self,
+each child, each cross-reference — via the shared `hash.certificate_is_stale`.
+`DEC011` (info) says a decomposition has never been checked; `DEC010` (warn) says the
+check was about earlier text. Neither moves a status: the check is two judgements about
+structure, not a verification. It is recorded whether or not problems were found, and
+the findings go on the node as a note — a check that ran and found three problems is
+not an unchecked node.
+
+**What was missing: a cheap way to act on it.** The only tool was `bp redo` — archive
+the subtree, decompose again, lose every proof underneath. For *I tightened a
+hypothesis* that is the wrong instrument by an order of magnitude. `bp amend`, or
+**Amend…** in the browser, is the right-sized one.
+
+One call. It is given the parent as it now stands, the children as they stand with
+their proofs (truncated — it may not touch them), the discharge table, and **the diff
+of the last edit**, which is what the history is for: without it the amender has to
+infer what moved by comparing the statement against the children. It returns a
+verdict:
+
+| verdict | means |
+|---|---|
+| `no-change` | the edit does not affect the decomposition. The cheapest good answer, and it saves the user a review |
+| `amend` | one entry per existing child — `keep`, `edit` or `drop` — plus new children, a rewritten reduction, and a complete `uses` table |
+| `redecompose` | patching would be dishonest. It proposes nothing and says so |
+
+The guarantees are the ones this system already had, pointed at a smaller area:
+
+- **Every existing child gets exactly one verdict.** Silence about a child is `AMD001`
+  and a repair round, because a lemma nobody mentioned cannot be told apart from a
+  lemma somebody forgot. `AMD003`–`AMD006` require a replacement statement on an
+  `edit`, a reason on an `edit` or a `drop`, an actual change behind an `amend`, and a
+  proof behind `reduction_changed`.
+- **The discharge table is re-gated before anything is written.** The amendment is
+  assembled into a candidate graph in memory and run through `check_discharge` and the
+  children-used check, exactly as a decomposition is. This is the point rather than a
+  formality: what a parent's edit changes *is* what its children can be given.
+- **Nothing is applied silently.** `amend()` writes only a proposal, to
+  `.bp/amend/<node>.json`, with a per-item diff. `apply_amendment()` applies just the
+  items the user accepted, keyed `child:<id>`, `new:<slug>`, `reduction`.
+- **Nothing is destroyed.** The subtree is copied to `attempts/<node>-amend-<n>/`
+  before the first write; a dropped child is archived, not deleted; an edited child's
+  previous statement is in the history.
+- **A stale proposal is refused.** The proposal stores a fingerprint of the parent and
+  children; applying it after the text has moved would be applying a judgement about a
+  different graph.
+
+Partial acceptance is honest rather than clever. Rejecting a `drop` keeps that child
+*and* its existing `uses` row, so declining one item does not manufacture a `DIS010`
+the user did not cause — but keeping a reduction that cites a new lemma you unticked
+does leave a citation to nothing, and both halves of the interface say so: the sheet
+warns before you apply, and the apply result names the diagnostics that remain.
+
+---
+
 ## 10. Mutations and the event log
 
 Every change goes through `bp/ops.py`: `add_node`, `edit_statement`,
@@ -1340,9 +1423,10 @@ question do not collide.
 
 ## 13. The roles
 
-Seven of them: `decompose`, `check`, `extract`, `verify`, `audit`, `prove`, and
-`paper` — the last one optional, run by hand, and the only one whose output is a
-document rather than a change to the graph (§9b).
+Eight: `decompose`, `check`, `extract`, `verify`, `audit`, `prove`, `paper` — optional,
+run by hand, and the only one whose output is a document rather than a change to the
+graph (§9b) — and `amend`, which adapts an existing decomposition to an edited parent
+and proposes rather than writes (§9c).
 
 Each assembles context deterministically (`bp/roles/context.py` — no model decides
 what a model gets to see), asks for JSON against a pydantic schema, runs the

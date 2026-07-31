@@ -51,6 +51,7 @@ FRONTMATTER_ORDER = [
     "statement_hash",
     "verified_against",
     "audited_against",
+    "checked_against",
     "claims",
     "claims_of",
     "verification",

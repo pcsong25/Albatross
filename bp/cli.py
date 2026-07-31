@@ -459,6 +459,105 @@ def render(
     raise typer.Exit(code=1)
 
 
+@app.command("revisions")
+def revisions_cmd(
+    node_id: str,
+    root: Optional[Path] = typer.Option(None, "--root"),
+    section: Optional[str] = typer.Option(
+        None, "--section", help="statement | proof (default: both)"
+    ),
+    show: Optional[int] = typer.Option(
+        None, "--show", help="print one revision by its number"
+    ),
+    diff: bool = typer.Option(
+        False, "--diff", help="unified diff of that revision against what is there now"
+    ),
+) -> None:
+    """Superseded versions of a node's Statement and Proof.
+
+    Every edit keeps the text it replaced, under `.bp/history/`. "Nothing is
+    destroyed" used to be true of nodes and false of the two fields you actually
+    write — the event log recorded a character count and threw the words away.
+    """
+    from . import history as history_mod
+
+    project = _project(root)
+    wanted = None
+    if section:
+        wanted = section.strip().capitalize()
+        if wanted not in history_mod.SECTIONS:
+            err_console.print(
+                f"[bold red]error[/] unknown section {section!r}; "
+                + "the snapshotted ones are "
+                + ", ".join(s.lower() for s in sorted(history_mod.SECTIONS))
+            )
+            raise typer.Exit(code=2)
+
+    revs = history_mod.revisions(project, node_id, wanted)
+    if show is None:
+        if not revs:
+            console.print(f"[dim]no earlier versions of {node_id} recorded[/]")
+            console.print(
+                "[dim]history starts at the first edit after this feature landed; "
+                "anything edited before it was not kept.[/]"
+            )
+            return
+        for rev in revs:
+            console.print(Text(rev.describe()))
+        console.print(
+            f"\n[dim]{len(revs)} revision(s) in {history_mod.node_dir(project, node_id)}. "
+            "`--show N` prints one, `--show N --diff` compares it with the current "
+            "text.[/]"
+        )
+        return
+
+    matches = [r for r in revs if r.seq == show]
+    if not matches:
+        err_console.print(
+            f"[bold red]error[/] {node_id} has no revision {show}; "
+            + (f"it has {', '.join(str(r.seq) for r in revs)}" if revs else "it has none")
+        )
+        raise typer.Exit(code=2)
+    if len(matches) > 1:
+        # Statement and Proof are numbered independently, so a bare number can name
+        # two different pieces of text. Guessing which would print the wrong one.
+        err_console.print(
+            f"[bold red]error[/] revision {show} of {node_id} is ambiguous: "
+            + " and ".join(m.section.lower() for m in matches)
+            + ". Add `--section statement` or `--section proof`."
+        )
+        raise typer.Exit(code=2)
+    match = matches[0]
+    if not diff:
+        sys.stdout.write(match.text)
+        return
+
+    import difflib
+
+    _, graph = _graph(root)
+    node = graph.get(node_id)
+    if node is None:
+        err_console.print(f"[bold red]error[/] no node {node_id!r} in the graph now")
+        raise typer.Exit(code=2)
+    current = node.section(match.section)
+    lines = difflib.unified_diff(
+        match.text.splitlines(),
+        current.splitlines(),
+        fromfile=f"{node_id} {match.section.lower()} (revision {match.seq})",
+        tofile=f"{node_id} {match.section.lower()} (now)",
+        lineterm="",
+    )
+    for line in lines:
+        style = ""
+        if line.startswith("+") and not line.startswith("+++"):
+            style = "green"
+        elif line.startswith("-") and not line.startswith("---"):
+            style = "red"
+        elif line.startswith("@@"):
+            style = "cyan"
+        console.print(Text(line, style=style))
+
+
 @app.command("events")
 def events_cmd(
     root: Optional[Path] = typer.Option(None, "--root"),

@@ -21,7 +21,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-from . import events
+from . import events, history
 from .checks import load_graph
 from .graph import Graph
 from .hash import certificate
@@ -313,6 +313,14 @@ def _edit_section(
         raise OpError(f"no node {node_id!r}")
     before = node.section(section)
     radius = stale_radius(graph, node_id) if section == STATEMENT else []
+    # Keep the version being replaced. `chars_before` used to be the only record of
+    # it, which made "nothing is destroyed" false of the two fields the user actually
+    # writes — see `bp/history.py`.
+    kept = (
+        history.snapshot(project, node_id, section, before)
+        if before.strip() != text.strip()
+        else None
+    )
     node.body = set_section(node.body, section, text)
     write_node(node)
     return _finish(
@@ -325,6 +333,9 @@ def _edit_section(
             "chars_before": len(before),
             "chars_after": len(text),
             "stale_radius": radius,
+            # The path, not the text: the log stays readable and small, and the text
+            # is one `bp revisions` away.
+            "previous": history.relative(project, kept) if kept else None,
         },
         actor=actor,
     )
@@ -456,10 +467,19 @@ def set_hypotheses(
         hyps = [Hypothesis(**dict(h)) for h in hypotheses]
     except Exception as exc:
         raise OpError(f"malformed hypothesis list: {exc}") from exc
+    before = [h.model_dump() for h in node.hypotheses]
     set_authored(node, "hypotheses", hyps, [h.model_dump() for h in hyps])
     write_node(node)
     return _finish(
-        project, graph, node, "set_hypotheses", {"ids": ids}, actor=actor
+        project,
+        graph,
+        node,
+        "set_hypotheses",
+        # `before` in full, not just the ids. A hypothesis list is small, and it is
+        # authored text like a statement: recording only the ids would lose the
+        # wording of a condition that was tightened, which is the thing you want back.
+        {"ids": ids, "before": before, "after": [h.model_dump() for h in hyps]},
+        actor=actor,
     )
 
 
@@ -628,6 +648,55 @@ def record_audit(
         node = graph[node_id]
     return _finish(
         project, graph, node, "record_audit", {"verdict": verdict}, actor=actor
+    )
+
+
+@serialised
+def record_decomposition_check(
+    project: Project,
+    node_id: str,
+    *,
+    problems: int = 0,
+    findings: str = "",
+    actor: str = "checker",
+) -> Result:
+    """The only writer of ``checked_against``.
+
+    The checker's two questions — does the reduction establish the parent, is any
+    child a restatement — are about the parent's statement together with its
+    children's, so the certificate is the same set :func:`bp.hash.certificate` uses
+    for a verification. That is what makes it a certificate rather than a boolean:
+    edit the parent or any child and ``DEC010`` says the decomposition was approved
+    against different text.
+
+    Recorded whether or not problems were found, and the count goes in the event.
+    A check that ran and found three problems is *not* an unchecked node, and
+    conflating them would have the same shape as the mistake this module keeps
+    guarding against — silence recorded as agreement.
+    """
+    graph = open_graph(project)
+    node = graph.get(node_id)
+    if node is None:
+        raise OpError(f"no node {node_id!r}")
+    if not node.children:
+        raise OpError(
+            f"{node_id} has no children, so there is no decomposition to have checked"
+        )
+    cert = certificate(node, graph)
+    node.checked_against = cert
+    set_frontmatter(node, "checked_against", {k: quoted(v) for k, v in cert.items()})
+    write_node(node)
+    if findings.strip():
+        add_note(project, node_id, findings.strip(), actor=actor)
+        graph = open_graph(project)
+        node = graph[node_id]
+    return _finish(
+        project,
+        graph,
+        node,
+        "record_decomposition_check",
+        {"problems": problems, "children": list(node.children)},
+        actor=actor,
     )
 
 

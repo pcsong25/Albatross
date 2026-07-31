@@ -72,9 +72,23 @@ class CheckReport:
 
 
 def check_decomposition(
-    project: Project, node_id: str, *, registry: Registry | None = None
+    project: Project,
+    node_id: str,
+    *,
+    registry: Registry | None = None,
+    apply: bool = True,
 ) -> CheckReport:
-    """Both checker calls on one node."""
+    """Both checker calls on one node.
+
+    With ``apply`` — the default — the fact that the check ran is recorded on the
+    node as ``checked_against``, a certificate over the parent's statement and its
+    children's, exactly like a verification's. It used to record nothing at all,
+    which meant that after editing a parent nothing anywhere could say its children
+    had been approved against different wording. See ``DEC010``.
+
+    The certificate is written whether or not problems were found. A check that ran
+    and found three problems is not an unchecked node.
+    """
     registry = registry or Registry(project)
     graph, _, swept = load_graph(project)
     if not swept:
@@ -108,7 +122,33 @@ def check_decomposition(
         context.load_prompt("check_triviality"), common, CheckAnswer, timeout
     )
     report.calls.append(meta)
+
+    if apply:
+        from .. import ops
+
+        ops.record_decomposition_check(
+            project,
+            node_id,
+            problems=len(report.problems),
+            findings=_findings_note(report),
+            actor="checker",
+        )
     return report
+
+
+def _findings_note(report: CheckReport) -> str:
+    """What the checker found, as a note on the node.
+
+    Same posture as the statement audit: the findings are the product, and a report
+    the user has to have been watching the terminal to see is a report that gets
+    lost. Nothing here touches a status.
+    """
+    if report.clean:
+        return ""
+    lines = [f"Decomposition check found {len(report.problems)} problem(s):"]
+    for label, problem in report.problems:
+        lines.append(f"- ({label}, {problem.confidence}) {problem.where}: {problem.why}")
+    return "\n".join(lines)
 
 
 def summarise(report: CheckReport) -> str:

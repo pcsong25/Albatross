@@ -195,6 +195,10 @@ Read the located problems. In our own test run this caught a decomposition whose
 two children *contradicted each other* — one child's conclusion was the negation
 of the other's — which no structural check can see.
 
+**4a. If you edit the statement afterwards, Amend rather than Redo.** Tightening a
+hypothesis on a node that already has children does not oblige you to start over —
+see §8c. **Redo** is for when the *strategy* was wrong.
+
 **4. Accept, or Redo.** If the decomposition is wrong, press **Redo**. It copies
 the current subtree to `attempts/<node>-<n>/` before archiving anything, and
 sends the previous attempt's problems to the decomposer as negative context. Give
@@ -300,7 +304,8 @@ short tour.*
 | Button | What it does | When |
 |---|---|---|
 | **Expand** | Decompose one level. Hint box prefilled with `strategy`. | A node with no children that you cannot prove directly |
-| **Redo** | Archive the subtree to `attempts/`, decompose again with the last attempt's problems as context | The decomposition was wrong |
+| **Amend…** | One call: what minimally has to change now the parent has been edited. Proposes; you accept per item (§8c) | You edited a statement that already has children |
+| **Redo** | Archive the subtree to `attempts/`, decompose again with the last attempt's problems as context | The *strategy* was wrong |
 | **Generate proof** | Prover role. Writes into the Proof section; **never** sets a status | `routine` and `standard` leaves |
 | **Verify** | Obligations, then the panel, then confirmation. Sets `verified` or `flagged` | Any node with a proof |
 | **Check decomposition** | The two checker calls | Any node with children |
@@ -313,6 +318,7 @@ short tour.*
 | **Mark assumption** | Taken as given for this project. Reason required | A standing hypothesis of the whole project |
 | **Relabel** | Change the difficulty label | The prover declined a "routine" lemma |
 | **Archive** | Leaves the active graph. **Never deletes** | A branch you have abandoned |
+| **Amend…** | One call: what minimally has to change now the parent has been edited. Proposes; you accept per item | After editing a statement that already has children (§8c) |
 | **Why?** | The status chain in plain English. No model involved | Whenever a colour surprises you |
 
 Two buttons in the top bar produce documents: **Render LaTeX** (exact, generated from
@@ -748,6 +754,65 @@ mildly reassuring and nothing more.
 
 ---
 
+## 8c. You edited a statement. Now what?
+
+Say you tighten the target: $s>1$ becomes $s>3/2$, and you add an oddness assumption.
+It already has four children, three of them with proofs.
+
+**What happens by itself.** The node's statement hash moves, so its verification is
+void and it goes `blocked:stale`; so does every node above it that cited it. Its
+**children are untouched**, which is right — a child does not depend on its parent.
+The structural checks re-run immediately: if a child's discharge cited a hypothesis you
+deleted, that is `DIS013` now; if a child needs one nobody sources, `DIS011`.
+
+**What you are told.** The node panel gains a line under **The decomposition**:
+*checked against an earlier version of this statement, or of a child* (`DEC010`). Every
+`bp check-decomp` now leaves a certificate, so the system can say this instead of
+leaving you to remember it. Note that the *colour* does not move for it — `DEC010` is a
+warning about a judgement being out of date, not a claim that anything is false — so
+after an edit, read `bp check` as well as the graph.
+
+**What you should do.** Not `bp redo`. That archives the whole subtree — copied to
+`attempts/` first, nothing is deleted — and decomposes from scratch, which throws away
+proofs that were probably still fine. Instead:
+
+    bp amend thm.main --hint "tightened s>1 to s>3/2 and added oddness"
+
+or **Amend…** on the node. One call. It sees the statement as it now reads, the children
+as they stand, and **the diff of your edit** — every edit keeps the text it replaced, so
+the amender is told what changed rather than guessing. It comes back with one of three
+answers:
+
+- **`no-change`** — the edit does not affect the decomposition. Worth having: it costs
+  one call and saves you reviewing changes nobody needs.
+- **`amend`** — a verdict for every child (`keep`, `edit`, `drop`), any new lemma the
+  statement now needs, a rewritten reduction, and a complete discharge table. That table
+  goes through the same deterministic gate a decomposition does, so an amendment that
+  leaves a hypothesis unsourced never reaches you.
+- **`redecompose`** — the statement has moved far enough that patching would be
+  dishonest. Then `bp redo` is the right answer, and you have paid one call to find out.
+
+**Nothing is applied until you say so, item by item.** Each proposed change is shown
+against the current text with a tick box — the statement diff, the hypotheses that
+move, the reduction. Take three and leave one if that is your judgement; the discharge
+check re-runs afterwards and tells you what your selection left open. Accepting an
+edit invalidates that child's verification (correctly — re-verify it) and keeps its
+proof. A dropped child is archived, never deleted. The subtree is copied to
+`attempts/<node>-amend-<n>/` before the first write.
+
+    bp amend thm.main --apply                          # take all of it
+    bp amend thm.main --apply --only child:thm.elb      # take one item
+    bp amend thm.main --show                            # re-read it, no call
+
+**And you can always see what you changed.** Every edit to a Statement or a Proof keeps
+the text it replaced:
+
+    bp revisions thm.main                               # what versions exist
+    bp revisions thm.main --show 2 --section statement  # print one
+    bp revisions thm.main --show 2 --diff               # against what is there now
+
+---
+
 ## 9. Models, and what it costs
 
 `bp.yaml` says which model plays which role. The system never names a model in
@@ -766,6 +831,7 @@ agents:
     auditor:    {backend: claude_cli, model: opus}
     prover:     {backend: claude_cli, model: sonnet}
     writer:     {backend: claude_cli, model: opus}
+    amender:    {backend: codex_cli,  model: default}
 budget:
   per_run_usd: 3.0
   max_calls_per_run: 80
@@ -797,7 +863,7 @@ role already resolves to, keeping your comments and key order. Nothing about you
 changes — it is just written down, so there is no layer left to infer. Run it once after
 upgrading.
 
-Beyond the eleven roles, one more knob:
+Beyond the twelve roles, one more knob:
 
 ```yaml
 agents:
@@ -978,6 +1044,7 @@ Deterministic — no key, no network, no configuration:
 | `bp obligations [id] [--kind discharge\|claim\|reference\|all]` | the worklists as JSON: one record per discharge, per sourced claim, and per citation |
 | `bp render [--clean] [--audit] [--pdf] [-o F]` | the LaTeX document; `--pdf` compiles it and explains any failure |
 | `bp labels` | every `\label`, everything referencing it, and everything referenced that does not exist |
+| `bp revisions <id> [--section S] [--show N] [--diff]` | superseded versions of a statement or proof: every edit keeps the text it replaced |
 | `bp events` / `bp jobs` / `bp calls` | history |
 | `bp sweep` | re-derive and persist the computed fields |
 | `bp admit <id> -r "…"` / `bp assume <id> -r "…"` | with a required reason |
@@ -996,6 +1063,7 @@ Agents — these call models and cost time or money:
 | `bp verify <id> [--level L] [--batch N] [--no-record]` | the three jobs the level calls for, then confirmation |
 | `bp audit <id>` | the four statement questions. Never changes a status, but does record that it ran — `TGT001` |
 | `bp prove <id> [--force]` | write a proof for an easy leaf |
+| `bp amend <id> [--hint "…"] [--show] [--apply] [--only k1,k2]` | adapt an existing decomposition to an edited parent (§8c). Proposing is one call; `--show` and `--apply` make none |
 | `bp paper [--plan] [--status] [--rebuild] [--bare] [--guidance "…"] [--pdf]` | the readable write-up (§9c). `--plan` and `--status` and `--rebuild` make no model call |
 | `bp recompile [--level L] [--dry-run] [--budget N] [--batch N]` | verify everything stale or unverified |
 | `bp resume [job_id]` | continue an interrupted recompile |

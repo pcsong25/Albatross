@@ -309,6 +309,29 @@ say what this passage uses it for?* That catches what a compiler cannot — a di
 that **defines** something cited as though it **asserted** something, a bound cited as
 a strict inequality, a statement about $\omega_0$ applied to $\omega(t)$.
 
+### 4.6c The decomposition
+Shown on any node that has children, and it answers one question: **has anything read
+these children against the statement as it now reads?**
+
+| It says | Means |
+|---|---|
+| *Checked against the statement as it now reads.* | `bp check-decomp` has run since the last edit to this node or any child |
+| *Never checked.* | The two questions have not been asked. One button, two calls |
+| *Checked against an earlier version of this statement, or of a child.* | `DEC010`. The children are untouched and may still be right, but nothing has read them against the new wording |
+
+The third case offers **Amend…** (primary) and **Just re-check it**. Amend is the
+cheaper and usually the right one: it proposes the minimal changes and keeps the
+children's proofs, where **Redo** archives the subtree and decomposes from scratch.
+
+This box exists because the certificate did not. A verification records what it was
+about and a statement audit records what it was about; the decomposition check recorded
+nothing, so after editing a parent nothing in the system could say that its children had
+been approved against different words.
+
+**The colour does not move for `DEC010`.** `global_status` is derived from verification
+records and children, not from diagnostics — a decomposition check going out of date is
+not a claim that anything is false. Read **Check** as well as the graph after an edit.
+
 ### 4.7 Verification record
 
 One line saying what this node's status is actually worth:
@@ -351,8 +374,9 @@ The button row changes with the node.
 
 | Button | Shown when | Does | ⚡ |
 |---|---|---|---|
-| **Expand** | no children | The decomposer: one level, 3–7 children, written as new files with the parent's `children` and discharge table updated. It first judges whether the node is *worth* decomposing and may decline. | ⚡ |
-| **Redo** | has children | Copies the subtree to `attempts/`, archives it, decomposes again — sending the previous attempt's problems as negative context. | ⚡ |
+| **Expand** | no children | The decomposer: one level, 1–10 children (usually three to seven), written as new files with the parent's `children` and discharge table updated. It first judges whether the node is *worth* decomposing and may decline. | ⚡ |
+| **Amend…** | has children | One call: what minimally has to change now the parent has been edited. Proposes only; you accept item by item, and the discharge table is re-gated first. Primary when `DEC010` is showing. See §5.2a. | ⚡ |
+| **Redo** | has children | Copies the subtree to `attempts/`, archives it, decomposes again — sending the previous attempt's problems as negative context. Reach for **Amend…** first unless the *strategy* was wrong. | ⚡ |
 | **Check decomposition** | has children | Two fixed questions: does the reduction establish the parent, and is any child a restatement or as hard as the parent. Writes nothing. | ⚡ |
 | **Generate proof** | no children | The prover, on this leaf. Writes into the Proof section and **never sets a status**. Refused on a `hard`/`unknown` node. | ⚡ |
 | **Verify** | a proof exists | Opens the level picker, then verifies. The verdict is **derived** from a record of what was checked. The dialog **prices the node first** — calls per job at the chosen level, with cache hits subtracted — because how big a node is is the one thing you cannot otherwise see. Red means the call cap cannot finish it, and it will be refused before spending anything. | ⚡ |
@@ -399,6 +423,42 @@ reports "nothing to recompile" no matter how often you press it — those nodes 
 
 Subscription backends report no price, so you get call counts instead of a
 reassuring `$0.00`. With those, the **call cap** is the only thing limiting a run.
+
+### 5.2a Amend… (per node)
+Reached from **Amend…** in a node's Actions row, or from the amber box in §4.6c. For a
+node whose statement has been edited under an existing decomposition.
+
+**Proposing costs one call. Everything else in this sheet is free**, because the
+judgement is bought once and stored under `.bp/amend/`; reading it back and applying it
+make no model call at all.
+
+What it shows:
+
+- **The hint box.** One line about what you changed and why — *"tightened s>1 to
+  s>3/2"*. Optional, worth ten seconds, and it goes to the model along with the
+  automatic diff of your last edit.
+- **The verdict.** `no-change` (the decomposition still fits — a real answer, and it
+  saves you a review), `amend` (proposed changes), or `redecompose` (the statement moved
+  too far to patch honestly; the sheet offers Redo).
+- **One card per proposed change, each with a tick box**, ticked by default and green
+  down the left edge while it is. For an `edit`: the current statement, the proposed
+  one, and every hypothesis that moves. For a `drop`: what would be archived — never
+  deleted. For a `new` child: its statement and hypotheses. For the `reduction`: the
+  proof before and after.
+- **Unchanged children**, named, so the answer is visibly complete.
+- **The amender's notes**, and any `AMD*`/`DIS*` diagnostics that survived its repair
+  round.
+- **A conflict warning**, live: if you untick a new lemma the reduction you are keeping
+  cites, the sheet says so before you apply rather than after.
+
+**Apply selected** applies exactly what is ticked. Untick everything and it applies
+nothing — that is what unticking means, and it is not read as "all of them". Accepting
+an edit invalidates that child's verification, which is correct, and keeps its proof;
+the subtree is copied to `attempts/<node>-amend-<n>/` first. A toast afterwards names
+any diagnostic your selection left open, by code.
+
+A proposal made before the text moved again cannot be applied: the tick boxes are
+disabled and the header says why. Propose again — it is one call.
 
 ### 5.3 Render LaTeX
 The unified `.tex` for the whole graph as plain text, regenerated on every request
@@ -588,6 +648,8 @@ warning, blue = note.
 | `TEX001`–`TEX002` | Authored LaTeX that fails *silently*: a mid-line `%` that deletes the rest of a line, an unbalanced `$`. |
 | `TGT001`–`TGT002` | The target theorem's statement has never been audited, or was audited against earlier wording. |
 | `circular-citation` | Not a `bp check` code but an objection kind: a citation pointing *up* the graph that the verifier judged to be used as a **fact**. The parent's proof rests on this node, so each rests on the other and neither is established. A child may *refer* to a parent's equation; it may never assume it. |
+| `AMD001`–`AMD006` | An amendment (§5.2a) only: a child it said nothing about, a child given two verdicts, an `edit` with no replacement statement, an `edit` or `drop` with no reason, an `amend` that changes nothing, `reduction_changed` with no proof. You see these only if they survived the repair round. |
+| `DEC010`–`DEC011` | The decomposition check (§4.6c): checked against earlier text, or never checked. Neither moves a status. |
 | `PAP001`–`PAP006` | The paper (§5.3a) only: a node the outline never placed, a node placed twice, a section silent about a node it was given, a stated node with no `\label{paper:<id>}`, a `\ref` to a node that is not in the project, a section that could not be written. None of them says anything about your development — they are about the exposition of it. |
 | `SYS001` | The computed fields in a file are out of date. Harmless; run `bp sweep`. |
 
@@ -632,7 +694,14 @@ Deliberate omissions, so you do not go looking:
   `support`, `claims` and `verification` are derived; the writer refuses.
 - **No partial expansion.** `Expand` refuses a node that already has children;
   `Redo` archives them first.
-- **No un-`Redo`.** The previous subtree is in `attempts/<node>-<n>/`, by hand.
+- **No un-`Redo`.** The previous subtree is in `attempts/<node>-<n>/`, by hand. The same
+  goes for an applied amendment: `attempts/<node>-amend-<n>/`.
+- **No revision viewer.** Every edit keeps the text it replaced, and the browser can
+  fetch them (`/api/node/<id>/revisions`), but reading and diffing them is
+  `bp revisions <node>` in a terminal.
+- **No automatic amendment.** Editing a statement never proposes changes to the children
+  on its own. It would spend a model call on every keystroke-sized save, and the whole
+  point of the sheet is that you decide when the question is worth asking.
 - **No automatic paper.** The exposition (§5.3a) is never rebuilt as a side effect of
   an edit, a verification or a render. It would cost a model call every time and would
   quietly replace a draft you may have been reading.

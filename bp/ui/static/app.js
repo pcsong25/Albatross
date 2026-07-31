@@ -25,7 +25,7 @@
 //: Getting that skew wrong is what produced "Cannot read properties of undefined"
 //: with the action buttons missing, and no way to guess that restarting the server
 //: was the fix.
-const API_VERSION = 5;
+const API_VERSION = 6;
 
 const state = {
   graph: null,
@@ -602,6 +602,7 @@ async function showDetail(id) {
     support_detail: [], why: [], claims: [], refs: [], labels: [],
     ledger_diagnostics: [], verification_reasons: [], obligations: [],
     claim_obligations: [], reference_obligations: [], uses: {}, verified_against: {},
+    checked_against: {}, decomposition_stale: false,
     statement: '', proof: '', notes: '', verification_summary: '', ...node,
   };
 
@@ -817,6 +818,47 @@ function renderNodeSections(panel, node, busy) {
     }
     panel.append(el('h3', { class: 'section' }, 'The statement itself'));
     panel.append(box);
+  }
+
+  // --- is the decomposition still about this statement?
+  //
+  // The certificate that used to be missing. Editing a parent leaves its children
+  // untouched and correct — a child does not depend on its parent — so nothing moved
+  // and nothing said the four lemmas might no longer cover the new wording. The only
+  // tool for acting on it was Redo, which throws every proof underneath away.
+  if (node.children.length) {
+    panel.append(el('h3', { class: 'section' }, 'The decomposition'));
+    if (node.decomposition_stale) {
+      const box = el('div', { class: 'warnbox' });
+      box.append(el('div', {}, el('b', {},
+        'Checked against an earlier version of this statement, or of a child. ')));
+      box.append(el('div', { class: 'small' },
+        'The children are untouched and may well still be right — but nothing has ' +
+        'read them against the statement as it now stands. Amend proposes the ' +
+        'minimal changes and keeps their proofs; Redo throws the subtree away.'));
+      box.append(el('button', {
+        class: 'primary',
+        ...(busy ? { disabled: 'disabled' } : {}),
+        onclick: () => amendSheet(node),
+      }, 'Amend…'));
+      box.append(el('button', {
+        ...(busy ? { disabled: 'disabled' } : {}),
+        onclick: () => runJob('check-decomp', node.id),
+      }, 'Just re-check it'));
+      panel.append(box);
+    } else if (!Object.keys(node.checked_against || {}).length) {
+      const box = el('div', { class: 'row small muted' });
+      box.append('Never checked. Two questions, two calls: does the reduction ' +
+                 'establish this node, and is any child a restatement of it.');
+      box.append(el('button', {
+        ...(busy ? { disabled: 'disabled' } : {}),
+        onclick: () => runJob('check-decomp', node.id),
+      }, 'Check decomposition'));
+      panel.append(box);
+    } else {
+      panel.append(el('div', { class: 'row small muted' },
+        'Checked against the statement as it now reads.'));
+    }
   }
 
   // --- citations
@@ -1046,6 +1088,9 @@ function actionButtons(node, busy) {
   if (!node.children.length) {
     add('Expand', () => expandDialog(node, false), { primary: true });
   } else {
+    // Amend before Redo, and primary when the decomposition is out of date: the
+    // cheap answer to an edited parent should be the one that reads as default.
+    add('Amend…', () => amendSheet(node), { primary: node.decomposition_stale });
     add('Redo', () => expandDialog(node, true));
     add('Check decomposition', () => runJob('check-decomp', node.id));
   }
@@ -1396,7 +1441,7 @@ const JOB_LABEL = {
   expand: 'Decomposing', redo: 'Redoing', 'check-decomp': 'Checking the decomposition',
   extract: 'Extracting the claim ledger', audit: 'Auditing the statement',
   verify: 'Verifying', prove: 'Writing a proof', recompile: 'Recompiling', resume: 'Resuming',
-  paper: 'Writing the paper',
+  paper: 'Writing the paper', amend: 'Working out what has to change',
 };
 
 async function runJob(kind, nodeId, body) {
@@ -1640,6 +1685,51 @@ function showJobResult(job) {
         body.append(el('div', { class: 'warnbox' }, el('b', {}, 'Named gap: '), gap));
       }
     }
+  } else if (job.kind === 'amend') {
+    body.append(el('p', {}, el('b', {}, 'Verdict: ' + result.verdict)));
+    body.append(el('div', {}, mathProse(result.assessment || '')));
+    if (result.verdict === 'no-change') {
+      body.append(el('p', { class: 'small muted' },
+        'Nothing needs to change. That is a real answer and it cost one call: the ' +
+        'children still cover the statement as it now reads.'));
+    } else if (result.verdict === 'redecompose') {
+      body.append(el('div', { class: 'warnbox' },
+        'It declined to patch this — the statement has moved too far. Redo archives ' +
+        'the subtree and decomposes again.'));
+    } else {
+      body.append(el('p', { class: 'small muted' },
+        `${(result.items || []).length} proposed change(s). Nothing has been written: ` +
+        'open Amend on the node to review them one at a time and apply the ones you ' +
+        'want.'));
+      for (const item of result.items || []) {
+        body.append(el('div', { class: 'row small' },
+          el('b', {}, item.kind + ': '), el('span', { class: 'mono' }, item.node),
+          item.why ? ' — ' + item.why : ''));
+      }
+      if ((result.kept || []).length) {
+        body.append(el('div', { class: 'row small muted' },
+          'Unchanged: ' + result.kept.join(', ')));
+      }
+    }
+    if (result.notes) {
+      body.append(el('h3', { class: 'section' }, "The amender's notes"));
+      const notes = el('div', { class: 'prose small' });
+      notes.append(mathProse(result.notes));
+      body.append(notes);
+    }
+    body.append(diagnosticList(result.diagnostics));
+    if (result.verdict === 'amend' && (result.items || []).length) {
+      body.append(el('div', {}, el('button', {
+        class: 'primary',
+        onclick: async () => {
+          closeSheet();
+          await select(job.node);
+          // The sheet needs the node's own fields, and the panel does not keep them.
+          try { amendSheet(await api('/api/node/' + encodeURIComponent(job.node))); }
+          catch (e) { toast(e.message, true); }
+        },
+      }, 'Review the changes')));
+    }
   } else if (job.kind === 'paper') {
     body.append(el('p', {}, el('b', {}, result.title || 'The paper'),
       ` — ${result.sections} section(s) written.`));
@@ -1847,6 +1937,232 @@ async function renderSheet() {
     { label: 'Open PDF', primary: true, onClick: openPdf },
   ]);
   await reload();
+}
+
+/** Amend: adapt an existing decomposition to an edited parent, item by item.
+ *
+ * The whole design is in the accept boxes. An agent proposing to rewrite a
+ * mathematician's lemma is exactly what the rest of this system refuses to do, so
+ * each change is shown against the current text and ticked or unticked on its own.
+ * Applying takes no model call — the judgement was bought when the proposal was made
+ * — so the review can take as long as it takes.
+ */
+async function amendSheet(node) {
+  const body = el('div', {});
+  body.append(el('div', { class: 'spinner-row' }, 'Looking for a proposal…'));
+  sheet('Amend ' + node.id, body, [{ label: 'Close', onClick: closeSheet }]);
+
+  let proposal;
+  try { proposal = await api(`/api/node/${encodeURIComponent(node.id)}/amend`); }
+  catch (e) { body.textContent = e.message; return; }
+  body.textContent = '';
+
+  body.append(el('p', { class: 'small muted' },
+    'One call. It reads this node as it now stands, the children as they stand and ' +
+    'the diff of your last edit, and proposes a verdict for every child — keep, ' +
+    'edit or drop — plus any new lemma the statement now needs. The discharge table ' +
+    'it returns goes through the same check a decomposition does, so an amendment ' +
+    'that leaves a hypothesis unsourced never reaches you.'));
+
+  const hint = el('textarea', {});
+  hint.setAttribute('placeholder',
+    'Optional, and worth ten seconds: what you changed and why. ' +
+    '"Tightened s>1 to s>3/2", "dropped the compact-support assumption".');
+
+  const propose = () => {
+    closeSheet();
+    runJob('amend', node.id, { hint: hint.value });
+  };
+
+  if (proposal.error) body.append(el('div', { class: 'warnbox' }, proposal.error));
+
+  if (!proposal.exists) {
+    body.append(el('h3', { class: 'section' }, 'What changed'));
+    body.append(hint);
+    sheetActions([
+      { label: 'Close', onClick: closeSheet },
+      { label: 'Propose changes (1 call)', primary: true, onClick: propose },
+    ]);
+    return;
+  }
+
+  // --- an existing proposal
+  const head = el('div', { class: proposal.current ? 'row small' : 'warnbox' });
+  head.append(el('div', {}, el('b', {}, 'Verdict: ' + proposal.verdict)));
+  head.append(el('div', {}, mathProse(proposal.assessment || '')));
+  head.append(el('div', { class: 'small muted' },
+    `proposed ${(proposal.proposed_at || '').replace('T', ' ').replace('+00:00', '')}` +
+    ` — ${proposal.calls} call(s)`));
+  if (!proposal.current) {
+    head.append(el('div', { class: 'small' },
+      'The text has changed since this was proposed, so it cannot be applied — it is ' +
+      'a judgement about a different version of the graph. Propose again.'));
+  }
+  body.append(head);
+  const conflicts = el('div', { id: 'amend-conflicts' });
+  body.append(conflicts);
+
+  if (proposal.verdict === 'no-change') {
+    body.append(el('div', { class: 'row small' },
+      'The amender read the new statement against the children and found nothing that ' +
+      'needs to change. Run Check decomposition to have the two questions asked ' +
+      'against the current wording.'));
+  } else if (proposal.verdict === 'redecompose') {
+    body.append(el('div', { class: 'warnbox' },
+      el('div', {}, el('b', {}, 'It declined to patch this. ')),
+      el('div', { class: 'small' },
+        'The statement has moved far enough that adapting the existing children would ' +
+        'be dishonest. Redo archives the subtree — copied to attempts/ first — and ' +
+        'decomposes again.'),
+      el('button', { onclick: () => { closeSheet(); expandDialog(node, true); } }, 'Redo…')));
+  }
+
+  const boxes = new Map();
+  if ((proposal.items || []).length) {
+    body.append(el('h3', { class: 'section' }, 'Proposed changes'));
+    body.append(el('div', { class: 'small muted' },
+      'Each one is yours to take or leave. Accepting an edit invalidates that ' +
+      "child's verification — correctly — and keeps its proof."));
+    for (const item of proposal.items) {
+      // Not `.flag`: that is objection styling, and a proposed change is neither a
+      // problem nor a warning. The left border turns green while it is ticked.
+      const row = el('div', { class: 'proposal accepted' });
+      const box = el('input', { type: 'checkbox' });
+      box.checked = true;
+      if (!proposal.current) box.setAttribute('disabled', 'disabled');
+      box.onchange = () => row.classList.toggle('accepted', box.checked);
+      boxes.set(item.key, box);
+      row.append(el('label', { class: 'small' }, box,
+        el('b', {}, ` ${item.kind}: `), el('span', { class: 'mono' }, item.node)));
+      if (item.why) row.append(el('div', { class: 'small muted' }, mathProse(item.why)));
+
+      if (item.kind === 'drop') {
+        row.append(el('div', { class: 'small' },
+          'Would be archived — never deleted, and Archive brings it back.'));
+        row.append(el('div', { class: 'quote' }, mathProse(item.before)));
+      } else {
+        if (item.before) {
+          row.append(el('div', { class: 'label' }, 'now'));
+          row.append(el('div', { class: 'quote' }, mathProse(item.before)));
+        }
+        row.append(el('div', { class: 'label' }, item.before ? 'proposed' : 'new statement'));
+        row.append(el('div', { class: 'quote' }, mathProse(item.after)));
+      }
+
+      const before = new Map((item.hypotheses_before || []).map((h) => [h.id, h.tex]));
+      const after = new Map((item.hypotheses_after || []).map((h) => [h.id, h.tex]));
+      const ids = [...new Set([...before.keys(), ...after.keys()])].sort();
+      const changed = ids.filter((id) => before.get(id) !== after.get(id));
+      if (changed.length) {
+        row.append(el('div', { class: 'label' }, 'hypotheses'));
+        for (const id of changed) {
+          const line = el('div', { class: 'dis' });
+          line.append(el('span', { class: 'hid' }, id), ' ');
+          // A hypothesis `tex` is a math-mode *fragment*, so it gets its dollars
+          // here, exactly as the panel and the discharge editor do.
+          if (before.has(id)) line.append(mathProse('$' + before.get(id) + '$'), ' → ');
+          if (after.has(id)) line.append(mathProse('$' + after.get(id) + '$'));
+          else line.append('removed');
+          row.append(line);
+        }
+      }
+      body.append(row);
+    }
+  }
+
+  if ((proposal.kept || []).length) {
+    body.append(el('div', { class: 'row small muted' },
+      'Unchanged: ' + proposal.kept.join(', ')));
+  }
+  if (proposal.notes) {
+    body.append(el('h3', { class: 'section' }, "The amender's notes"));
+    const notes = el('div', { class: 'prose small' });
+    notes.append(mathProse(proposal.notes));
+    body.append(notes);
+  }
+  body.append(diagnosticList(proposal.diagnostics));
+
+  body.append(el('h3', { class: 'section' }, 'Propose again'));
+  body.append(hint);
+
+  const status = el('div', {});
+  body.append(status);
+
+  // The one way a partial acceptance contradicts itself: keeping a reduction that
+  // cites a new lemma you have just unticked leaves a citation to nothing. The apply
+  // result would say so afterwards; saying it first is better.
+  const reduction = (proposal.items || []).find((i) => i.kind === 'reduction');
+  const recheck = () => {
+    conflicts.textContent = '';
+    if (!reduction || !boxes.get('reduction') || !boxes.get('reduction').checked) return;
+    const dangling = (proposal.items || [])
+      .filter((i) => i.kind === 'new' && boxes.get(i.key) && !boxes.get(i.key).checked)
+      .filter((i) => reduction.after.includes(i.node) || reduction.after.includes(i.key.slice(4)))
+      .map((i) => i.node);
+    if (!dangling.length) return;
+    const box = el('div', { class: 'warnbox' },
+      el('div', {}, el('b', {}, 'These do not fit together. ')),
+      el('div', {}, 'The reduction you are keeping cites ' + dangling.join(', ') +
+        ', which you have unticked — so the proof would refer to a node that does not ' +
+        'exist (REF001). Either take the new lemma too, or leave the reduction and ' +
+        'edit the proof yourself.'));
+    conflicts.append(box);
+    box.scrollIntoView({ block: 'nearest' });
+  };
+  for (const box of boxes.values()) {
+    const previous = box.onchange;
+    box.onchange = () => { if (previous) previous(); recheck(); };
+  }
+  recheck();
+
+  const applySelected = async () => {
+    const accept = [...boxes.entries()].filter(([, b]) => b.checked).map(([k]) => k);
+    status.textContent = '';
+    status.append(el('div', { class: 'spinner-row' }, 'applying…'));
+    let result;
+    try {
+      result = await post(`/api/node/${encodeURIComponent(node.id)}/amend/apply`,
+                          { accept: accept });
+    } catch (e) {
+      status.textContent = '';
+      status.append(el('div', { class: 'warnbox' }, e.message));
+      return;
+    }
+    closeSheet();
+    await refresh();
+    select(node.id);
+    const summary = [];
+    if (result.edited.length) summary.push(`edited ${result.edited.join(', ')}`);
+    if (result.added.length) summary.push(`added ${result.added.join(', ')}`);
+    if (result.dropped.length) summary.push(`archived ${result.dropped.join(', ')}`);
+    if (result.reduction) summary.push('replaced the reduction');
+    toast(summary.length ? summary.join('; ') : 'nothing applied');
+    const errors = (result.diagnostics || []).filter((d) => d.severity === 'error');
+    if (errors.length) {
+      // Named, not counted: "1 error(s) remain" tells the user nothing they can act
+      // on, and after a partial acceptance the *which* is the whole message.
+      toast(errors.map((d) => `${d.code}: ${d.message}`).join(' · '), true);
+    }
+  };
+
+  const actions = [{ label: 'Close', onClick: closeSheet }];
+  if (proposal.current && (proposal.items || []).length) {
+    actions.push({ label: 'Apply selected', primary: true, onClick: applySelected });
+  }
+  actions.push({ label: 'Propose again (1 call)', onClick: propose });
+  sheetActions(actions);
+}
+
+/** Replace a sheet's footer buttons after it has opened. */
+function sheetActions(actions) {
+  const actionBox = document.getElementById('sheet-actions');
+  actionBox.textContent = '';
+  for (const action of actions) {
+    actionBox.append(el('button', {
+      class: action.primary ? 'primary' : (action.danger ? 'danger' : ''),
+      onclick: action.onClick,
+    }, action.label));
+  }
 }
 
 /** The optional exposition: an agent's readable write-up of the development.
