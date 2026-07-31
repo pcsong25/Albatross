@@ -488,7 +488,9 @@ def register(app: typer.Typer) -> None:
         if summary:
             console.print(Text(f"{proposal.node}: {proposal.verdict}"))
             console.print(Text(f"  {proposal.assessment}"))
-            console.print(f"[dim]proposed {proposal.proposed_at}[/]")
+            from . import events as events_mod
+
+            console.print(f"[dim]proposed {events_mod.local(proposal.proposed_at)}[/]")
             console.print()
         for item in proposal.items:
             console.print(Text(f"[{item.key}] {item.kind} — {item.node}", style="bold"))

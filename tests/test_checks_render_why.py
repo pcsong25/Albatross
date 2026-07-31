@@ -380,6 +380,91 @@ class TestRenderCorruption:
         assert render.math("") == ""
         assert render.math("$$") == ""
 
+    def test_every_way_a_model_wraps_a_fragment_is_unwrapped(self):
+        """The extractor writes claim texts as `\\(…\\)` about a third of the time on a
+        real project — 63 of 195 claims in the one that found this. Wrapping that in
+        dollars gives `$\\(…\\)$`: "Bad math environment delimiter" in LaTeX, and a
+        parse error in KaTeX, so the browser showed literal backslashes."""
+        for wrapped in (
+            "$P_u=E_u$",
+            "$$P_u=E_u$$",
+            "\\(P_u=E_u\\)",
+            "\\[P_u=E_u\\]",
+        ):
+            assert render.math(wrapped) == "$P_u=E_u$", wrapped
+
+    def test_prose_carrying_its_own_mathematics_is_left_alone(self):
+        """Not a fragment at all: wrapping it would put `the map` into math mode and
+        nest `\\(` inside `$`."""
+        text = "the map \\(f\\) is continuous"
+        assert render.math(text) == text
+
+    def test_an_inner_environment_is_wrapped_and_an_outer_one_is_not(self):
+        """`gathered` requires surrounding math mode; `gather` provides it. The first
+        version of this matched the prefix `gather`, so a real hypothesis using
+        `\\begin{gathered}` was passed through and gave "allowed only in math mode"."""
+        assert render.math("\\begin{gathered}a\\end{gathered}").startswith("$")
+        for outer in ("align", "align*", "equation", "gather", "multline", "eqnarray"):
+            body = f"\\begin{{{outer}}}a=b\\end{{{outer}}}"
+            assert render.math(body) == body, outer
+        for inner in ("aligned", "cases", "array", "pmatrix", "split"):
+            body = f"\\begin{{{inner}}}a\\end{{{inner}}}"
+            assert render.math(body) == f"${body}$", inner
+
+    def test_a_sentence_wrapped_as_mathematics_is_lifted_back_into_text(self):
+        r"""Neither LaTeX nor KaTeX breaks a line inside `\text{}`, so a claim the
+        extractor wrote as `\(\text{a whole sentence …}\cA\)` ran off the right edge of
+        the page and out of the panel. Lifting the long run out keeps every symbol and
+        lets the line break."""
+        claim = (
+            "\\(\\text{The finite-dimensional terminal condition is imposed on the "
+            "center and forward-unstable spectral subspaces of }\\cA|_{E_u}\\)"
+        )
+        out = render.math(claim)
+        assert out.startswith("The finite-dimensional")
+        assert out.endswith("$\\cA|_{E_u}$")
+        assert "\\text{" not in out
+        assert "  " not in out  # the seam used to double the space
+
+    def test_a_short_text_run_stays_inside_the_formula(self):
+        """`\\text{ where }` is a connective and belongs in the mathematics."""
+        frag = "s>3/2 \\text{ where $s$ is the regularity}"
+        assert render.math(frag) == f"${frag}$"
+
+    def test_an_unbalanced_text_run_is_left_alone(self):
+        """A formatting improvement must not mangle text to achieve itself."""
+        frag = "\\text{unclosed " + "x" * 80
+        assert render.math(frag) == f"${frag}$"
+
+    def test_a_text_run_containing_braces_is_split_correctly(self):
+        runs = render._split_text_runs("a\\text{b \\{c\\} d}e")
+        assert runs == [(False, "a"), (True, "b \\{c\\} d"), (False, "e")]
+
+    def test_the_browser_follows_the_same_rule(self):
+        """Two implementations of one convention, so they are checked against each
+        other: `app.js` must recognise the same wrappers and the same openers, or the
+        ledger renders differently from the document."""
+        from bp.ui.app import STATIC
+
+        js = (STATIC / "app.js").read_text(encoding="utf-8")
+        assert "function mathFragment(" in js
+        # The openers, brace included — the bug this test exists for.
+        assert "displaymath|eqnarray)\\*?\\}" in js
+        # And the same threshold for lifting a long `\text{}` run out of math mode, so
+        # the ledger in the browser wraps exactly where the PDF does.
+        assert f"LONG_TEXT_RUN = {render.LONG_TEXT_RUN};" in js
+        # And nothing wraps a fragment by hand any more. Comments are stripped first:
+        # `mathFragment`'s own docstring quotes the old idiom in order to explain it,
+        # which an unfiltered scan reads as a use — the same trap as scanning the LaTeX
+        # template for `\newtheorem` without stripping its comments.
+        import re as _re
+
+        live = _re.sub(r"/\*.*?\*/", "", js, flags=_re.S)
+        live = _re.sub(r"^\s*//.*$", "", live, flags=_re.M)
+        head, _, tail = live.partition("function mathFragment(")
+        outside = head + tail.partition("\n}\n")[2]
+        assert "mathProse('$' + " not in outside
+
     def test_latex_open_quotes_survive_reference_resolution(self):
         """`_BACKTICK_RE` knew nothing about the ``quote'' idiom, so the phrase
         between two quotations was set in typewriter — in a document that compiled."""

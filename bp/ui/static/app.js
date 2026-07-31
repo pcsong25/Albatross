@@ -342,6 +342,159 @@ function sanitiseMath(tex) {
   return out;
 }
 
+/** A math-mode *fragment*, rendered robustly. The mirror of `render.math`.
+ *
+ * Hypothesis `tex`, `applied_to` and a claim's `text` are declared to be fragments —
+ * `s > 3/2`, not `$s > 3/2$` — and models do not reliably obey that. The naive
+ * `mathProse('$' + tex + '$')` therefore produced `$\(P_u\cX_0=E_u\)$` for the roughly
+ * one claim in three that the extractor writes with its own `\(…\)`, which KaTeX
+ * refuses outright: those claims rendered as literal backslashes in the ledger. The
+ * same string breaks pdflatex in the audit document.
+ *
+ * Three cases, identical to the Python side:
+ *   wrapped end to end ($…$, $$…$$, \(…\), \[…\]) → unwrap, render inline
+ *   contains an explicit math opener but is not wrapped → prose with mathematics in
+ *     it, so hand the whole thing to mathProse, which splits it
+ *   anything else → wrap
+ *
+ * A bare interior `$` is deliberately not an "opener": nested dollars inside `\text{}`
+ * are legal, and treating them as an opener was a bug this codebase already paid for.
+ */
+const FRAGMENT_WRAPPERS = [
+  /^\$\$([\s\S]*)\$\$$/,
+  /^\$((?:[^$]|\\\$)*)\$$/,
+  /^\\\(([\s\S]*)\\\)$/,
+  /^\\\[([\s\S]*)\\\]$/,
+];
+// The closing brace is load-bearing: `gathered`, `aligned`, `cases` and `array` are
+// *inner* environments that require surrounding math mode rather than providing it, so
+// they must be wrapped. Without the `\}` the prefix `gather` matched `\begin{gathered}`.
+const OPENS_MATH_RE =
+  /\\\(|\\\[|\\begin\{(?:align|equation|gather|multline|displaymath|eqnarray)\*?\}/;
+
+// `\text{…}` inside mathematics, and how long a run has to be before it is lifted out
+// of it. Neither LaTeX nor KaTeX breaks a line inside `\text{}`, so a claim written as
+// `\(\text{The finite-dimensional terminal condition is imposed on …}\cA|_{E_u}\)` runs
+// off the right edge of the panel and off the page in the PDF. A short connective —
+// `\text{ where }` — belongs inside the formula and reads better there.
+const TEXT_CMD_RE = /\\text(?:rm|it|bf|sf|tt|normal)?\{/;
+const LONG_TEXT_RUN = 60;
+
+/** Split `a\text{b}c` into [[false,'a'],[true,'b'],[false,'c']]. Brace-counted, since a
+ *  text run legitimately contains braces and a greedy match would eat the rest. */
+function splitTextRuns(tex) {
+  const out = [];
+  let buf = '';
+  let i = 0;
+  while (i < tex.length) {
+    TEXT_CMD_RE.lastIndex = 0;
+    const match = TEXT_CMD_RE.exec(tex.slice(i));
+    if (!match || match.index !== 0) {
+      if (tex[i] === '\\' && i + 1 < tex.length) { buf += tex.slice(i, i + 2); i += 2; continue; }
+      buf += tex[i]; i += 1; continue;
+    }
+    let depth = 1;
+    let j = i + match[0].length;
+    while (j < tex.length && depth) {
+      if (tex[j] === '\\') { j += 2; continue; }
+      if (tex[j] === '{') depth += 1;
+      else if (tex[j] === '}') depth -= 1;
+      j += 1;
+    }
+    if (depth) { buf += tex[i]; i += 1; continue; }   // unbalanced: leave it alone
+    if (buf) { out.push([false, buf]); buf = ''; }
+    out.push([true, tex.slice(i + match[0].length, j - 1)]);
+    i = j;
+  }
+  if (buf) out.push([false, buf]);
+  return out;
+}
+
+/** Lift long `\text{…}` runs out of a fragment, or '' to leave it alone. */
+function prosify(inner) {
+  const runs = splitTextRuns(inner);
+  if (!runs.some(([isText, chunk]) => isText && chunk.trim().length > LONG_TEXT_RUN)) return '';
+  const parts = [];
+  for (const [isText, chunk] of runs) {
+    if (!chunk.trim()) continue;
+    parts.push(isText ? chunk.trim() : '$' + chunk.trim() + '$');
+  }
+  return parts.join(' ').replace(/\s+([,.;:)])/g, '$1').trim();
+}
+
+function mathFragment(tex) {
+  const raw = (tex || '').trim();
+  if (!raw) return document.createDocumentFragment();
+  for (const pattern of FRAGMENT_WRAPPERS) {
+    const match = pattern.exec(raw);
+    if (match) {
+      const inner = match[1].trim();
+      if (!inner) return document.createDocumentFragment();
+      return mathProse(prosify(inner) || '$' + inner + '$');
+    }
+  }
+  if (OPENS_MATH_RE.test(raw)) return mathProse(raw);
+  return mathProse(prosify(raw) || '$' + raw + '$');
+}
+
+/** Split a Notes section into its stamped entries.
+ *
+ * `ops.add_note` writes `*<iso> — <actor>.* <text>`, one paragraph per entry. Parsing
+ * them back is display-only — the section is prose, the file is the truth, and nothing
+ * here writes — but it buys three things: a fold, a count, and a timestamp shown in
+ * the reader's own time zone instead of the UTC the file stores.
+ *
+ * Anything before the first stamp is kept as an unstamped entry: a note section that
+ * was hand-written, which is allowed and must not vanish.
+ */
+const NOTE_ENTRY_RE = /^\*(\d{4}-\d{2}-\d{2}T[0-9:+\-.Z]*)\s+—\s+([^\n]*?)\.\*\s*/m;
+
+function parseNotes(text) {
+  const out = [];
+  let rest = (text || '').trim();
+  if (!rest) return out;
+  let match = NOTE_ENTRY_RE.exec(rest);
+  if (match && match.index > 0) {
+    out.push({ stamp: '', actor: '', body: rest.slice(0, match.index).trim() });
+    rest = rest.slice(match.index);
+    match = NOTE_ENTRY_RE.exec(rest);
+  }
+  if (!match) {
+    out.push({ stamp: '', actor: '', body: rest });
+    return out;
+  }
+  while (match) {
+    const stamp = match[1];
+    const actor = match[2];
+    const after = rest.slice(match.index + match[0].length);
+    const next = NOTE_ENTRY_RE.exec(after);
+    const body = next ? after.slice(0, next.index) : after;
+    out.push({ stamp: stamp, actor: actor, body: body.trim() });
+    if (!next) break;
+    rest = after;
+    match = next;
+  }
+  return out;
+}
+
+/** A stored timestamp in the reader's own time zone.
+ *
+ * Everything is stored as UTC with its offset — a log read on another machine a year
+ * later needs that. Every *display* converts, because "edited at 22:57" for something
+ * you did over lunch is arithmetic the reader should not have to do. The old code
+ * stripped `+00:00` and printed the UTC clock as though it were local, which is the
+ * one thing worse than either.
+ */
+function localTime(iso, withSeconds) {
+  if (!iso) return '';
+  const at = new Date(iso);
+  if (isNaN(at.getTime())) return iso;      // unparseable: show it as stored
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ` +
+         `${pad(at.getHours())}:${pad(at.getMinutes())}` +
+         (withSeconds ? `:${pad(at.getSeconds())}` : '');
+}
+
 /** Render LaTeX prose: text as text, mathematics through KaTeX. */
 function mathProse(text) {
   const frag = document.createDocumentFragment();
@@ -686,7 +839,7 @@ function renderNodeSections(panel, node, busy) {
     const list = el('ul', { class: 'hyplist' });
     for (const h of node.hypotheses) {
       const li = el('li', {}, el('span', { class: 'hid' }, h.id));
-      li.append(mathProse('$' + h.tex + '$'));
+      li.append(mathFragment(h.tex));
       list.append(li);
     }
     panel.append(list);
@@ -733,7 +886,7 @@ function renderNodeSections(panel, node, busy) {
     for (const [cid, use] of Object.entries(node.uses)) {
       const head = el('div', { class: 'child' });
       head.append(el('a', { class: 'noderef', onclick: () => select(cid) }, cid));
-      if (use.applied_to) { head.append(' applied to '); head.append(mathProse('$' + use.applied_to + '$')); }
+      if (use.applied_to) { head.append(' applied to '); head.append(mathFragment(use.applied_to)); }
       uses.append(head);
       for (const [hid, src] of Object.entries(use.discharges).sort()) {
         const admitted = src.trim().startsWith('ADMITTED');
@@ -773,10 +926,13 @@ function renderNodeSections(panel, node, busy) {
       for (const claim of node.claims) {
         const unsourced = claim.source.kind === 'none';
         const row = el('div', { class: 'dis' + (unsourced ? ' admitted' : '') });
-        row.append(el('span', { class: 'hid' }, claim.id));
-        // A claim's text is a math-mode fragment, like a hypothesis `tex` — the
-        // dollars are the renderer's job, not the model's.
-        row.append(mathProse('$' + claim.text + '$'));
+        // `c1:` then the claim. Without the separator the id ran straight into the
+        // mathematics — `c1\omega\in C^1` — and the eye could not find the boundary.
+        row.append(el('span', { class: 'hid' }, claim.id + ':'), ' ');
+        // A claim's text is a math-mode fragment, like a hypothesis `tex` — but the
+        // extractor writes it already wrapped about a third of the time, so this goes
+        // through `mathFragment` rather than a hand-rolled pair of dollars.
+        row.append(mathFragment(claim.text));
         row.append(el('span', { class: 'muted small' }, unsourced
           ? '  ← UNSOURCED'
           : `  ← ${claim.source.kind}${claim.source.ref ? ': ' + claim.source.ref : ''}`));
@@ -929,13 +1085,53 @@ function renderNodeSections(panel, node, busy) {
   }
 
   // --- notes
-  panel.append(el('h3', { class: 'section' }, 'Notes'));
-  if (node.notes.trim()) {
-    const body = el('div', { class: 'prose small' });
-    body.append(mathProse(node.notes));
-    panel.append(body);
-  } else {
+  //
+  // The node's Notes section: free prose, appended by `bp note` / Add note and by the
+  // roles that have something to say but no business setting a status — the
+  // decomposer's reservations, the statement audit's findings, the decomposition
+  // check's problems, the amender's notes. It is *fed to every agent as context* on
+  // later calls, which is what makes it worth writing in: it is the project's memory,
+  // not a log of what happened (that is History, and it is separate).
+  //
+  // Each entry is stamped, so it grows without bound on a node you keep coming back
+  // to. Folded by default past a couple of entries, newest first — the recent one is
+  // almost always the one you want, and the old ones are still there.
+  const entries = parseNotes(node.notes);
+  const noteHead = el('h3', { class: 'section' }, 'Notes');
+  panel.append(noteHead);
+  if (!entries.length) {
     panel.append(el('div', { class: 'prose muted small' }, 'None.'));
+  } else {
+    const box = el('div', {});
+    const folded = entries.length > 2 || node.notes.length > 800;
+    const draw = (open) => {
+      box.textContent = '';
+      const shown = open ? entries : entries.slice(-1);
+      for (const entry of shown) {
+        const one = el('div', { class: 'note' });
+        if (entry.stamp || entry.actor) {
+          one.append(el('div', { class: 'small muted' },
+            [localTime(entry.stamp), entry.actor].filter(Boolean).join(' — ')));
+        }
+        const prose = el('div', { class: 'prose small' });
+        prose.append(mathProse(entry.body));
+        one.append(prose);
+        box.append(one);
+      }
+      if (!open && entries.length > shown.length) {
+        box.append(el('div', { class: 'small muted' },
+          `${entries.length - shown.length} earlier note(s) hidden.`));
+      }
+    };
+    let open = !folded;
+    const toggle = el('button', {
+      onclick: () => { open = !open; toggle.textContent = label(); draw(open); },
+    });
+    const label = () => (open ? 'fold' : `show all ${entries.length}`);
+    toggle.textContent = label();
+    noteHead.append(toggle);
+    draw(open);
+    panel.append(box);
   }
 
 }
@@ -1360,7 +1556,7 @@ async function dischargeDialog(node) {
     for (const h of child.hypotheses) {
       const label = el('label', { class: 'small' });
       label.append(el('span', { class: 'hid' }, h.id), ' ');
-      label.append(mathProse('$' + h.tex + '$'));
+      label.append(mathFragment(h.tex));
       body.append(label);
       const input = el('input', {
         type: 'text',
@@ -1991,7 +2187,7 @@ async function amendSheet(node) {
   head.append(el('div', {}, el('b', {}, 'Verdict: ' + proposal.verdict)));
   head.append(el('div', {}, mathProse(proposal.assessment || '')));
   head.append(el('div', { class: 'small muted' },
-    `proposed ${(proposal.proposed_at || '').replace('T', ' ').replace('+00:00', '')}` +
+    `proposed ${localTime(proposal.proposed_at, true)}` +
     ` — ${proposal.calls} call(s)`));
   if (!proposal.current) {
     head.append(el('div', { class: 'small' },
@@ -2058,10 +2254,8 @@ async function amendSheet(node) {
         for (const id of changed) {
           const line = el('div', { class: 'dis' });
           line.append(el('span', { class: 'hid' }, id), ' ');
-          // A hypothesis `tex` is a math-mode *fragment*, so it gets its dollars
-          // here, exactly as the panel and the discharge editor do.
-          if (before.has(id)) line.append(mathProse('$' + before.get(id) + '$'), ' → ');
-          if (after.has(id)) line.append(mathProse('$' + after.get(id) + '$'));
+          if (before.has(id)) line.append(mathFragment(before.get(id)), ' → ');
+          if (after.has(id)) line.append(mathFragment(after.get(id)));
           else line.append('removed');
           row.append(line);
         }
@@ -2204,9 +2398,7 @@ async function paperSheet() {
   } else {
     const head = el('div', { class: paper.stale ? 'warnbox' : 'row small' });
     head.append(el('div', {}, el('b', {}, paper.title)));
-    // Same shape as the History sheet's timestamps: UTC, readable, no timezone
-    // arithmetic the user has to do in their head.
-    const built = (paper.built_at || '').replace('T', ' ').replace('+00:00', '');
+    const built = localTime(paper.built_at, true);
     head.append(el('div', { class: 'small' },
       `built ${built} — ${paper.calls} call(s)` +
       (paper.cost_usd ? `, $${paper.cost_usd.toFixed(2)}` : '')));
@@ -2436,7 +2628,7 @@ async function historySheet() {
                             el('th', {}, 'node'), el('th', {}, 'who')));
   for (const event of data.events) {
     table.append(el('tr', {},
-      el('td', { class: 'mono small' }, (event.ts || '').replace('T', ' ').replace('+00:00', '')),
+      el('td', { class: 'mono small' }, localTime(event.ts, true)),
       el('td', {}, event.kind),
       el('td', {}, event.node
         ? el('a', { class: 'noderef', onclick: () => { closeSheet(); select(event.node); } }, event.node)

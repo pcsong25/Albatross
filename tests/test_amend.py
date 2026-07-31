@@ -98,6 +98,18 @@ class TestHistory:
         assert result.event["payload"]["before"] == [{"id": "H1", "tex": "s > 1"}]
         assert result.event["payload"]["after"] == [{"id": "H1", "tex": "s > 3/2"}]
 
+    def test_a_revision_is_timestamped_in_local_time(self, project):
+        """`saved_at` is display only — nothing sorts or compares it — so it is shown
+        in the reader's zone rather than in the UTC the mtime is read as."""
+        from datetime import datetime
+
+        write_node(project, "t", target=True, statement="One.")
+        ops.edit_statement(project, "t", "Two.")
+        rev = history.revisions(project, "t")[0]
+        stamp = datetime.fromtimestamp(rev.path.stat().st_mtime).astimezone()
+        assert rev.saved_at == stamp.strftime("%Y-%m-%d %H:%M:%S")
+        assert "+00:00" not in rev.saved_at
+
     def test_a_node_id_is_not_a_path(self, project):
         with pytest.raises(ValueError):
             history.node_dir(project, "../escape")

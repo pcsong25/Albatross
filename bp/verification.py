@@ -231,7 +231,11 @@ def compact(record: VerificationRecord | None) -> str:
     if record.statement_audit != NOT_RUN:
         bits.append(f"statement audit: {record.statement_audit}")
     if record.checked_at:
-        bits.append(f"at {record.checked_at}")
+        # Local, like every other timestamp a person reads. Note this string also
+        # goes into the rendered LaTeX, so the document says when *you* checked it.
+        from .events import local
+
+        bits.append(f"at {local(record.checked_at)}")
     return "; ".join(bits)
 
 

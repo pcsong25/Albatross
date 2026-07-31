@@ -96,32 +96,150 @@ def prose(text: str) -> str:
     return _BARE_PERCENT_RE.sub(r"\\%", text)
 
 
-#: A fragment that is entirely wrapped in one pair of dollars already.
-_WRAPPED_RE = re.compile(r"^\$(?P<inner>(?:[^$]|\\\$)*)\$$", re.S)
+#: A fragment that is entirely wrapped already, in any of the four ways a model
+#: reaches for. ``\(…\)`` is the one that cost a real document: the extractor writes
+#: claim texts as ``\(P_u\cX_0=E_u\)`` roughly a third of the time, and wrapping that
+#: in dollars gives ``$\(…\)$`` — "Bad math environment delimiter" in LaTeX and a
+#: parse error in KaTeX, so the claim rendered as literal backslashes in the browser
+#: and the audit document would not compile at all.
+_WRAPPED_RES = (
+    re.compile(r"^\$\$(?P<inner>.*)\$\$$", re.S),
+    re.compile(r"^\$(?P<inner>(?:[^$]|\\\$)*)\$$", re.S),
+    re.compile(r"^\\\((?P<inner>.*)\\\)$", re.S),
+    re.compile(r"^\\\[(?P<inner>.*)\\\]$", re.S),
+)
+
+#: A delimiter that opens math mode *explicitly*. If one of these appears inside a
+#: fragment that is not wrapped end to end, the text is already complete LaTeX with
+#: its own math mode — prose with mathematics in it — and wrapping it would nest math
+#: inside math. A bare interior ``$`` is deliberately **not** in this set; see below.
+#: The closing brace is load-bearing. ``gathered``, ``aligned``, ``cases``, ``array``
+#: and friends are *inner* environments: they require surrounding math mode rather than
+#: providing it, so they must be wrapped. Without the ``\}`` the prefix ``gather``
+#: matched ``\begin{gathered}``, which a real hypothesis in a real project uses — and
+#: passing that through unwrapped is "\begin{gathered} allowed only in math mode".
+_OPENS_MATH_RE = re.compile(
+    r"\\\(|\\\[|\\begin\{(?:align|equation|gather|multline|displaymath|eqnarray)\*?\}"
+)
+
+
+#: ``\text{…}`` and its font-switching cousins, as an opener of a text run inside
+#: mathematics.
+_TEXT_CMD_RE = re.compile(r"\\text(?:rm|it|bf|sf|tt|normal)?\{")
+
+#: How long a ``\text{…}`` run has to be before it is lifted out of math mode. A short
+#: connective — ``\text{ where }`` — belongs inside the formula and looks better there.
+#: A whole sentence does not: neither LaTeX nor KaTeX will break a line inside
+#: ``\text{}``, so a claim written as ``\(\text{The finite-dimensional terminal
+#: condition is imposed on …}\cA|_{E_u}\)`` runs off the right-hand edge of the page and
+#: out of the panel. That is what the user reported twice.
+LONG_TEXT_RUN = 60
+
+
+def _split_text_runs(tex: str) -> list[tuple[bool, str]]:
+    r"""Split ``a\text{b}c`` into ``[(False, 'a'), (True, 'b'), (False, 'c')]``.
+
+    Brace-counted rather than regexed, because a text run legitimately contains braces
+    — ``\text{the space $H^s(\mathbb R)$}`` — and a greedy match would swallow the rest
+    of the fragment. An unbalanced run is left alone: this is a formatting improvement,
+    and mangling text to achieve it would be the wrong trade.
+    """
+    out: list[tuple[bool, str]] = []
+    buf: list[str] = []
+    i = 0
+    while i < len(tex):
+        match = _TEXT_CMD_RE.match(tex, i)
+        if match is None:
+            # Skip an escaped character whole, so `\{` never opens a group.
+            if tex[i] == "\\" and i + 1 < len(tex):
+                buf.append(tex[i : i + 2])
+                i += 2
+                continue
+            buf.append(tex[i])
+            i += 1
+            continue
+        depth, j = 1, match.end()
+        while j < len(tex) and depth:
+            if tex[j] == "\\":
+                j += 2
+                continue
+            if tex[j] == "{":
+                depth += 1
+            elif tex[j] == "}":
+                depth -= 1
+            j += 1
+        if depth:
+            buf.append(tex[i])
+            i += 1
+            continue
+        if buf:
+            out.append((False, "".join(buf)))
+            buf = []
+        out.append((True, tex[match.end() : j - 1]))
+        i = j
+    if buf:
+        out.append((False, "".join(buf)))
+    return out
+
+
+def _prosify(inner: str) -> str | None:
+    r"""Lift long ``\text{…}`` runs out of a fragment, or None to leave it alone.
+
+    ``\text{A long sentence about }\cA`` becomes ``A long sentence about $\cA$`` — the
+    same content, in text mode, where it can break across lines.
+    """
+    runs = _split_text_runs(inner)
+    if not any(is_text and len(chunk.strip()) > LONG_TEXT_RUN for is_text, chunk in runs):
+        return None
+    parts: list[str] = []
+    for is_text, chunk in runs:
+        # Each part is stripped and rejoined with a single space: a text run that ends
+        # in a space plus a separator gave "subspaces of  $\cA$", with two.
+        if is_text and chunk.strip():
+            parts.append(chunk.strip())
+        elif not is_text and chunk.strip():
+            parts.append(f"${chunk.strip()}$")
+    joined = " ".join(parts)
+    return re.sub(r"\s+([,.;:)])", r"\1", joined).strip() or None
 
 
 def math(tex: str) -> str:
-    """Wrap a math-mode fragment in dollars.
+    r"""Wrap a math-mode fragment in dollars, unless it is already mathematics.
 
-    Hypothesis ``tex``, ``applied_to`` and a claim's ``text`` are fragments —
-    ``s > 3/2``, not ``$s > 3/2$``.
+    Hypothesis ``tex``, ``applied_to`` and a claim's ``text`` are declared to be
+    fragments — ``s > 3/2``, not ``$s > 3/2$``. Models do not reliably obey that, so
+    three cases:
 
-    The rule used to be "leave it alone if it contains any ``$``", which was wrong
-    in a way that compiled: a fragment like
-    ``s>3/2 \text{ where $s$ is the regularity}`` has an interior dollar, so it was
-    emitted bare into text mode. It typesets — and ``>`` in text mode is the wrong
-    glyph, so the reader saw ``s¿3/2``. Now a fragment already wrapped end-to-end is
-    unwrapped and re-wrapped, and anything else is wrapped, which is right in both
-    cases.
+    *Wrapped end to end* — ``$…$``, ``$$…$$``, ``\(…\)`` or ``\[…\]`` — is unwrapped
+    and re-wrapped inline. This is the common one: the extractor writes claim texts as
+    ``\(…\)`` about a third of the time in practice.
+
+    *Contains an explicit math opener but is not wrapped* — ``the map \(f\) is
+    continuous`` — is passed through untouched. It is prose with mathematics in it, and
+    wrapping it would put ``the map`` into math mode and nest ``\(`` inside ``$``.
+
+    *Anything else* is wrapped.
+
+    The rule used to be "leave it alone if it contains any ``$``", which was wrong in a
+    way that compiled: ``s>3/2 \text{ where $s$ is the regularity}`` has an interior
+    dollar, so it was emitted bare into text mode, and ``>`` in text mode is the wrong
+    glyph — the reader saw ``s¿3/2``. That case is still wrapped, because a bare ``$``
+    is not in :data:`_OPENS_MATH_RE`: nested dollars inside ``\text{}`` are legal and
+    correct, and it is only the explicit openers that cannot nest.
     """
     tex = prose(tex.strip())
     if not tex:
         return ""
-    wrapped = _WRAPPED_RE.match(tex)
-    if wrapped:
-        inner = wrapped.group("inner").strip()
-        return f"${inner}$" if inner else ""
-    return f"${tex}$"
+    for pattern in _WRAPPED_RES:
+        wrapped = pattern.match(tex)
+        if wrapped:
+            inner = wrapped.group("inner").strip()
+            if not inner:
+                return ""
+            return _prosify(inner) or f"${inner}$"
+    if _OPENS_MATH_RE.search(tex):
+        return tex
+    return _prosify(tex) or f"${tex}$"
 
 
 def _link(node_id: str, known: set[str]) -> str:

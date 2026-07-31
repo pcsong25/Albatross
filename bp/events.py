@@ -23,7 +23,38 @@ from .paths import Project
 
 
 def now() -> str:
+    """The timestamp as *stored*: UTC, with its offset, always.
+
+    A log is read years later, possibly on another machine, possibly across a
+    daylight-saving boundary; a local time with no offset in it is not a time. So
+    storage is UTC and *display* converts — see :func:`local`.
+    """
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def local(ts: str | None, *, seconds: bool = True) -> str:
+    """A stored timestamp, in the reader's own time zone, for display.
+
+    ``2026-07-31T22:57:40+00:00`` → ``2026-07-31 15:57:40``. Nothing in the system
+    compares or sorts the result — it exists because a mathematician looking at
+    "edited at 22:57" for something they did over lunch has to do arithmetic in their
+    head, and will get it wrong.
+
+    An unparseable or missing value comes back as-is rather than raising: this is
+    display code, and a log line with an odd timestamp should still be readable.
+    """
+    if not ts:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(ts)
+    except ValueError:
+        return ts
+    if parsed.tzinfo is None:
+        # Written before this system stored offsets, or by hand. UTC is the only
+        # honest guess, and it is what `now()` has always produced.
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    shown = parsed.astimezone()
+    return shown.strftime("%Y-%m-%d %H:%M:%S" if seconds else "%Y-%m-%d %H:%M")
 
 
 def append(
@@ -103,4 +134,6 @@ def describe(event: dict[str, Any]) -> str:
         detail = (payload.get("text") or "")[:60]
     elif kind == "verify":
         detail = f"verdict={payload.get('verdict')}"
-    return f"{event.get('ts')}  {kind:<16} {node:<28} {detail}".rstrip()
+    # Local time: this line is read by a person, in a terminal, now. The stored
+    # value stays UTC.
+    return f"{local(event.get('ts')):<19}  {kind:<16} {node:<28} {detail}".rstrip()

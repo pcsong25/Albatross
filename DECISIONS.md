@@ -1690,3 +1690,73 @@ no existing project moves provider.
 **To reverse.** Delete `bp/roles/amend.py`, the prompt, the role, the three endpoints and
 the sheet. `checked_against` and `DEC010` stand on their own and are worth keeping
 either way.
+
+---
+
+## D066 — Timestamps are stored in UTC and displayed in the reader's zone
+
+**Date** 2026-07-31 · **Milestone** L3 (tuning)
+
+The user: *"the history does not use my time zone."* It did not, and the way it did not
+was the worst of the three options: `events.now()` writes UTC with its offset, which is
+right, and every display then did `.replace('T', ' ').replace('+00:00', '')` — printing
+the UTC clock with the marker that would have told you it was UTC removed.
+
+**Decision.** Storage stays UTC-with-offset: a log is read on another machine, years
+later, across daylight-saving boundaries, and a local time with no offset in it is not a
+time. Display converts, through one helper on each side — `events.local()` and
+`localTime()` in `app.js`. Applied to the History sheet, `bp events`, `bp revisions`, a
+note's stamp, when a paper was built, when an amendment was proposed, and the
+`checked_at` in a verification record (which also means the *document* now says when
+*you* checked a lemma).
+
+Neither helper raises on a value it cannot parse — it returns it as stored. This is
+display code, and a log line with an odd timestamp is still worth reading.
+
+**To reverse.** Two functions. Nothing sorts or compares their output.
+
+---
+
+## D067 — A declared fragment may arrive already wrapped, and both renderers unwrap it
+
+**Date** 2026-07-31 · **Milestone** L3 (tuning)
+
+The user reported that claim-ledger entries "sometimes fail to be compiled on the UI".
+On their project, **63 of 195 claims** had `text` beginning `\(` and ending `\)`.
+
+`Claim.text`, `Hypothesis.tex` and `applied_to` are *declared* to be math-mode
+fragments — `s > 3/2`, not `$s > 3/2$` — and the browser wrapped them by hand:
+`mathProse('$' + text + '$')`. For those 63 that produced `$\(…\)$`, which KaTeX refuses
+outright, so the claim rendered as literal backslashes; the same string is "Bad math
+environment delimiter" in LaTeX, and `bp render --audit` on that project did not compile
+at all.
+
+**Decision.** One rule, implemented on both sides and tested against each other:
+
+1. wrapped end to end in `$…$`, `$$…$$`, `\(…\)` or `\[…\]` → unwrap, re-wrap inline;
+2. contains an explicit math **opener** but is not wrapped end to end → it is prose with
+   mathematics in it; pass it through untouched;
+3. otherwise → wrap.
+
+Two traps, both paid for. A bare interior `$` is deliberately *not* an opener — nested
+dollars inside `\text{}` are legal, and treating them as an opener is the bug an
+earlier `math()` already fixed by wrapping `s>3/2 \text{ where $s$ is …}`. And the opener pattern
+needs its closing brace: `gathered`, `aligned`, `cases`, `array` and `split` *require*
+surrounding math mode rather than providing it, so matching the prefix `gather` made
+`\begin{gathered}` — which a real hypothesis in a real project uses — pass through
+unwrapped and give "allowed only in math mode".
+
+**Also: a sentence declared as mathematics is lifted back into text.** Neither engine
+breaks a line inside `\text{}`, so `\(\text{The finite-dimensional terminal condition is
+imposed on …}\cA|_{E_u}\)` ran off the right edge of the page and out of the panel — the
+overflow the user reported twice. A `\text{}` run longer than `LONG_TEXT_RUN` (60
+characters) is emitted as text with the surrounding mathematics re-wrapped around it;
+shorter runs stay inside the formula, where a connective like `\text{ where }` belongs.
+
+**Alternatives.** (a) Make the extractor obey the convention. Rejected as the *only*
+fix: the prompt already says it, models will keep doing this, and a renderer that breaks
+on plausible input is a renderer with a bug. The prompt still says it. (b) Trust a
+fragment that contains any delimiter. Rejected: that is exactly the earlier `s¿3/2` bug.
+
+**To reverse.** `render.math` and `mathFragment` go back to unconditional wrapping, and
+a third of a real project's claims stop rendering.

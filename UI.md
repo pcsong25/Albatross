@@ -265,11 +265,18 @@ The same idea, pointed at what the proof asserts *on its own account*. "By stand
 elliptic regularity, $\omega \in C^1$, hence…" has no child, no hypothesis and no
 entry anywhere — and at research level that is the commonest way a gap hides.
 
+A claim's `text` is declared to be a math-mode **fragment**, and the extractor does not
+reliably obey that: on a real project a third of the claims came back already wrapped in
+`\(…\)`. Both this panel and the rendered document now unwrap whatever wrapper they are
+given before re-wrapping, so a claim renders as mathematics rather than as literal
+backslashes — and a claim that is really a *sentence* inside `\text{}` is lifted back
+into text mode, because neither KaTeX nor LaTeX will break a line inside one.
+
 | You see | Means |
 |---|---|
 | *Not extracted.* | No ledger, so `LED001` cannot fire and a verifier's "no objection" cannot mean "all N claims were checked". One cheap call fixes it. |
-| `c1  ω ∈ C¹([0,T))  ← literature: standard elliptic regularity` | A claim with a named source. |
-| `c3  Φ is a contraction on B_R  ← UNSOURCED` (orange) | `LED001`, a hard error: a premise the proof is smuggling in. It does not mean the claim is false — it means nothing here justifies it. |
+| `c1:  ω ∈ C¹([0,T))  ← literature: standard elliptic regularity` | A claim with a named source. |
+| `c3:  Φ is a contraction on B_R  ← UNSOURCED` (orange) | `LED001`, a hard error: a premise the proof is smuggling in. It does not mean the claim is false — it means nothing here justifies it. |
 | *This ledger was extracted from an earlier version of the proof.* | `LED100`. The audit is describing text that is no longer in the file. Re-extract. |
 
 `extract` / `re-extract` on the heading runs it. Do not hand-edit `claims`: it is a
@@ -332,6 +339,13 @@ been approved against different words.
 records and children, not from diagnostics — a decomposition check going out of date is
 not a claim that anything is false. Read **Check** as well as the graph after an edit.
 
+### 4.6d Timestamps
+Everything is **stored** as UTC with its offset — a log read on another machine a year
+later needs that — and every timestamp you *see* is converted to your own zone: the
+History sheet, a note's stamp, when the paper was built, when an amendment was proposed,
+`bp events`, `bp revisions`. The old code stripped the `+00:00` and printed the UTC
+clock as though it were local, which is worse than either.
+
 ### 4.7 Verification record
 
 One line saying what this node's status is actually worth:
@@ -367,6 +381,22 @@ Timestamped, attributed prose. **Notes are fed to every agent as context on ever
 later attempt at this node**, which makes *Add note* the main way to tell the tool
 something it keeps getting wrong. Withdrawn objections, declined decompositions and
 audit findings all land here.
+
+### 4.9a What the Notes section is, and is not
+Free prose on the node, appended by **Add note** / `bp note` **and by the roles that
+have something to say but no business setting a status** — the decomposer's
+reservations, the statement audit's findings, the decomposition check's problems, the
+amender's notes. Each entry carries a stamp and an actor, which is why it can look like
+a log.
+
+It is not one. **History** (§5.9) is the event log: what happened, append-only,
+project-wide, and never read by a model. Notes are the node's *memory*: they are fed to
+every agent as context on every later call about this node, which is what makes them
+worth writing in. A dead end recorded here stops the next decomposition walking into it.
+
+Because they accumulate on any node you keep returning to, the section folds. Past two
+entries it shows the most recent one and says how many are hidden; **show all N**
+expands it, **fold** puts it back. Nothing is truncated on disk — the fold is a view.
 
 ### 4.10 Actions
 

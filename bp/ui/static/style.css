@@ -164,7 +164,7 @@ select { font: inherit; font-size: 13px; padding: 5px; }
 
 .hyplist { font-size: 14px; margin: 0; padding-left: 4px; list-style: none; }
 .hyplist li { margin: 3px 0; }
-.hyplist .hid {
+.hyplist .hid, .uses .hid, .proposal .hid {
   font: 600 12px ui-monospace, Menlo, monospace; color: var(--dim);
   margin-right: 7px;
 }
@@ -176,6 +176,11 @@ select { font: inherit; font-size: 13px; padding: 5px; }
 .uses .admitted { color: var(--blocked); }
 
 .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+/* One Notes entry. Separated rather than boxed: it is prose the user reads, and a
+   card per paragraph would turn the project's memory into a feed. */
+.note { margin: 0 0 10px; }
+.note + .note { border-top: 1px solid #f0ede8; padding-top: 8px; }
 
 .flag {
   border-left: 3px solid var(--unsound); background: #fdf3f2;

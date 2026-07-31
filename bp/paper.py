@@ -41,6 +41,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from . import events as events_mod
 from . import hash as hash_mod
 from . import render
 from .diagnostics import Diagnostic, err, warn
@@ -637,7 +638,8 @@ def describe(draft: Draft, graph: Graph) -> str:
     delta = changes(draft, graph)
     lines = [
         f"{draft.title!r}",
-        f"  built {draft.built_at} from {len(draft.fingerprint)} node(s), "
+        f"  built {events_mod.local(draft.built_at)} from "
+        f"{len(draft.fingerprint)} node(s), "
         f"{draft.calls} call(s)"
         + (f", ${draft.cost_usd:.2f}" if draft.cost_usd else ""),
         f"  {delta.sentence()}",

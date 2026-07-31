@@ -1082,3 +1082,51 @@ The claim-ledger half of the question needed no code: `bp/ledger.py` and
 explained it. Worth noting anyway that the user's own project had a live `LED006` —
 a claim resting on a computation with no named artifact — which is the check doing
 precisely what it is for.
+
+### Four small things, one of which was not small
+
+From a single message: the history did not use the user's time zone, the claim ledger's
+ids ran into the mathematics, the Notes section had grown too long to live above the
+action buttons, and — mid-turn — *"sometimes the claim ledger messages fail to be
+compiled on the UI."*
+
+The first three are what they sound like. Timestamps: storage stays UTC-with-offset and
+every display converts, through one helper per side; the old code stripped `+00:00` and
+printed the UTC clock, which is worse than either choice. The ledger gets `c1:` and the
+`.hid` spacing that had only ever been applied inside `.hyplist` (so the discharge rows
+had read `H1← hypothesis:H1`). Notes fold past two entries, showing the most recent, with
+their stamps in local time and their actor named — and `UI.md` now says what that section
+*is*, since it looks like a log and is not one: it is the node's memory, fed to every
+agent on every later call, which is precisely why it is worth writing in.
+
+The fourth was a real bug with two faces. `Claim.text` is *declared* to be a math-mode
+fragment; on the user's project **63 of 195** claims came back from the extractor wrapped
+in `\(…\)`. Both renderers wrapped them again. `$\(…\)$` is a KaTeX parse error — hence
+literal backslashes in the ledger, which is what the user saw — and "Bad math environment
+delimiter" in LaTeX, which meant `bp render --audit` on that project did not compile at
+all. One rule now, in `render.math` and in `mathFragment`, with a test asserting the two
+agree.
+
+Getting it right needed two corrections, both found by running it against the real data
+rather than against invented examples. A bare interior `$` must not count as "already
+mathematics", or the old `s¿3/2` bug comes back. And the opener pattern needs its closing
+brace: `gathered`, `aligned`, `cases` and `array` *require* surrounding math mode rather
+than providing it, so matching the prefix `gather` let a real hypothesis's
+`\begin{gathered}` through unwrapped — "allowed only in math mode", no PDF.
+
+Then the overflow the user had reported twice turned out to be the same family: nothing
+breaks a line inside `\text{}`, so a claim written as `\(\text{a whole sentence…}\cA\)`
+runs off the page. A `\text{}` run over sixty characters is lifted back into text mode
+with the mathematics re-wrapped around it; a short `\text{ where }` stays put.
+
+```
+pytest                                                714 passed
+render / --audit / --clean / paper, on the real 195-claim ledger   4 PDFs
+ledger rows with leftover raw LaTeX, in the browser   0 of 35
+```
+
+Separately, and not ours: that project's paper and document both failed on `\cO`, a macro
+used by one node and defined in no preamble. `bp render --pdf` names it and lists what
+*is* defined, which is the classifier doing its job — but nothing runs pdflatex until
+somebody asks, so an undefined macro stays invisible while the browser shows it as red
+literal text.

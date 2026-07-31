@@ -175,6 +175,35 @@ class TestEvents:
         assert all(e["uuid"] for e in log)
         assert len({e["uuid"] for e in log}) == 3
 
+    def test_it_is_stored_in_utc_and_shown_in_local_time(self, project):
+        """Storage and display are different jobs. A log read on another machine a
+        year later needs the offset; a mathematician reading "22:57" for something they
+        did over lunch should not have to convert in their head."""
+        from datetime import datetime
+
+        base(project)
+        ops.add_note(project, "c", "hello")
+        stored = events.read(project)[-1]["ts"]
+        assert stored.endswith("+00:00")
+
+        shown = events.local(stored)
+        assert "+00:00" not in shown and "T" not in shown
+        expect = datetime.fromisoformat(stored).astimezone()
+        assert shown == expect.strftime("%Y-%m-%d %H:%M:%S")
+        # And the line a person reads uses it.
+        assert shown in events.describe(events.read(project)[-1])
+
+    def test_a_timestamp_it_cannot_parse_is_shown_as_stored(self, project):
+        """Display code must not raise on an odd log line — the line is still worth
+        reading, and this is the one place a hand-edited log would surface."""
+        assert events.local("who knows") == "who knows"
+        assert events.local(None) == ""
+        # Written before the system stored offsets: UTC is the only honest guess and
+        # is what `now()` has always produced.
+        assert events.local("2026-07-31T22:57:40") == events.local(
+            "2026-07-31T22:57:40+00:00"
+        )
+
     def test_the_log_is_append_only_jsonl(self, project):
         base(project)
         ops.add_note(project, "c", "one")

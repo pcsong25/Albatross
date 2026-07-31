@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import events
 from .load import atomic_write
 from .model import ID_RE, PROOF, STATEMENT
 from .paths import Project
@@ -65,11 +66,12 @@ class Revision:
     def saved_at(self) -> str:
         """When this version stopped being current, from the file's mtime.
 
-        The authoritative record of the edit is the event; this is here so
+        In the reader's own time zone, because this is display and nothing compares
+        it. The authoritative record of the edit is the event; this is here so
         ``bp revisions`` can print something useful without joining the two.
         """
         stamp = datetime.fromtimestamp(self.path.stat().st_mtime, tz=timezone.utc)
-        return stamp.isoformat(timespec="seconds")
+        return events.local(stamp.isoformat(timespec="seconds"))
 
     def describe(self) -> str:
         words = len(self.text.split())
