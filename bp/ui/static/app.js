@@ -25,7 +25,7 @@
 //: Getting that skew wrong is what produced "Cannot read properties of undefined"
 //: with the action buttons missing, and no way to guess that restarting the server
 //: was the fix.
-const API_VERSION = 3;
+const API_VERSION = 4;
 
 const state = {
   graph: null,
@@ -1132,6 +1132,37 @@ function verifyDialog(node) {
   const blurb = el('div', { class: 'small muted' }, LEVEL_BLURB.standard);
   select_.addEventListener('change', () => { blurb.textContent = LEVEL_BLURB[select_.value]; });
   body.append(el('label', { class: 'small muted' }, 'Level'), select_, blurb);
+
+  // The bill. Every worklist is computed from the files, so this is exact rather
+  // than an estimate — the only unknown is one call per objection. It is here
+  // because how big a node is is the one thing the user cannot otherwise find out,
+  // and the alternative was learning it from a budget error after paying for it.
+  const bill = el('div', { class: 'small' }, 'counting…');
+  body.append(bill);
+  const showBill = (plan) => {
+    bill.textContent = '';
+    const level = plan.levels[select_.value];
+    if (!level) return;
+    const rows = level.jobs.filter((j) => j.calls || j.cached);
+    for (const row of rows) {
+      const note = row.cached ? `  (${row.cached} of ${row.records} cached)` : '';
+      bill.append(el('div', { class: 'muted' },
+        `${row.job}: ${row.calls} call${row.calls === 1 ? '' : 's'}${note}`));
+    }
+    bill.append(el('div', {},
+      `at least ${level.floor} call${level.floor === 1 ? '' : 's'}, plus one per objection`
+      + (plan.cap ? ` — the cap is ${plan.cap} per run` : '')));
+    if (!level.fits) {
+      bill.append(el('div', { class: 'warnbox' },
+        `This will not finish: raise budget.max_calls_per_run in bp.yaml above `
+        + `${level.floor}, or use a cheaper level. A run that stops part-way records `
+        + `nothing, so it would be refused before spending anything.`));
+    }
+  };
+  api(`/api/verify/plan/${encodeURIComponent(node.id)}`)
+    .then((plan) => { showBill(plan); select_.addEventListener('change', () => showBill(plan)); })
+    .catch(() => { bill.textContent = ''; });
+
   sheet('Verify ' + node.id, body, [
     { label: 'Cancel', onClick: closeSheet },
     {
@@ -1562,6 +1593,15 @@ function showJobResult(job) {
       el('b', {}, result.verdict),
       ` at level ${result.level}.`));
     body.append(el('div', { class: 'row small muted' }, result.summary || ''));
+    if (result.confirm_stopped) {
+      // The verification was recorded, but the confirmation pass did not finish, so
+      // some objections below were never re-read in context. Saying which is the
+      // difference between a finding and a maybe.
+      body.append(el('div', { class: 'warnbox' },
+        'The call cap stopped the confirmation pass, so objections marked NOT '
+        + 'CONFIRMED below were never re-read in context and may be pedantry. The '
+        + 'narrow checks are cached, so re-running is cheap. ' + result.confirm_stopped));
+    }
     for (const reason of result.reasons || []) {
       body.append(el('div', { class: 'row small' }, 'flagged because: ' + reason));
     }
@@ -2007,8 +2047,9 @@ async function agentsSheet() {
         'your project to a different provider. Add them explicitly to choose.')));
   }
   body.append(el('p', { class: 'small muted' },
-    `Budget: $${data.budget.per_recompile_usd} and ` +
-    `${data.budget.max_calls_per_recompile} call(s) per recompile. ` +
+    `Budget: $${data.budget.per_run_usd} and ` +
+    `${data.budget.max_calls_per_run} call(s) per run — a single deep verify of a ` +
+    `large node can reach this; the Verify dialog prices the node before you start. ` +
     `${data.calls_logged} call(s) in the log.` +
     (data.replay ? '  Running with --replay: calls resolve from the log, never the network.' : '')));
   body.append(el('p', { class: 'small muted' },

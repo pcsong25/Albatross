@@ -354,7 +354,7 @@ The button row changes with the node.
 | **Redo** | has children | Copies the subtree to `attempts/`, archives it, decomposes again — sending the previous attempt's problems as negative context. | ⚡ |
 | **Check decomposition** | has children | Two fixed questions: does the reduction establish the parent, and is any child a restatement or as hard as the parent. Writes nothing. | ⚡ |
 | **Generate proof** | no children | The prover, on this leaf. Writes into the Proof section and **never sets a status**. Refused on a `hard`/`unknown` node. | ⚡ |
-| **Verify** | a proof exists | Opens the level picker, then verifies. The verdict is **derived** from a record of what was checked. | ⚡ |
+| **Verify** | a proof exists | Opens the level picker, then verifies. The verdict is **derived** from a record of what was checked. The dialog **prices the node first** — calls per job at the chosen level, with cache hits subtracted — because how big a node is is the one thing you cannot otherwise see. Red means the call cap cannot finish it, and it will be refused before spending anything. | ⚡ |
 | **Extract claims** | a proof exists | Builds the claim ledger. One cheap call. | ⚡ |
 | **Audit statement** | always | Four fixed questions about the statement. Writes a note, **never a status**. | ⚡ |
 | **Add child** | always | A lemma you state yourself, attached as a child. The discharge table will then report its hypotheses as undischarged until you fill them in. | no |

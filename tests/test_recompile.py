@@ -197,11 +197,19 @@ class TestRun:
 
 class TestResume:
     def _interrupt(self, project):
-        """Run with a budget that runs out after the first node."""
+        """Run with a budget that fits the first node and not the second.
+
+        Three is what a `standard` verify of a proved leaf plans for: one extraction
+        and the two panel members. `verify` now prices its whole worklist before the
+        first call and refuses a node the remaining budget cannot finish, so the run
+        stops at a *node boundary* rather than part-way through one — which is the
+        point, because a half-finished verification is never recorded and its calls
+        are therefore wasted. `bp verify --dry-run` prints the same arithmetic.
+        """
         registry = scripted_registry(
             project, verifier_a=[NO_OBJECTION], verifier_b=[NO_OBJECTION]
         )
-        registry.budget = Budget(max_calls=2)  # exactly what node `a` needs
+        registry.budget = Budget(max_calls=3)
         return recompile.run(project, registry=registry)
 
     def test_the_run_stops_and_records_where_it_got_to(self, project):

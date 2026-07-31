@@ -58,7 +58,8 @@ STATIC = Path(__file__).parent / "static"
 #: 1  L2 as shipped
 #: 2  claims / ledger_diagnostics / verification (Addendum A)
 #: 3  labels / refs / reference_obligations / audited_against (citations)
-API_VERSION = 3
+#: 4  /api/verify/plan — the bill for a node, and confirm_stopped on a verify
+API_VERSION = 4
 
 #: pdflatex writes into a shared build directory, so two compiles at once
 #: interleave and a `FileResponse` can stream a file being rewritten. Module-level
@@ -823,6 +824,38 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
 
         return runner.submit("audit", node_id, work).as_dict()
 
+    @app.get("/api/verify/plan/{node_id}")
+    def api_verify_plan(node_id: str) -> dict[str, Any]:
+        """What a verification of this node would cost, at each level.
+
+        Deterministic and free — it reads the worklists and the answer cache and
+        makes no call. The dialog shows it *before* the button is live, because the
+        one thing a user cannot find out any other way is how big this node is: a
+        `deep` verify of a node with thirty obligations is forty calls, and finding
+        that out by spending forty calls and being told the cap was hit is a bad
+        way to learn it.
+        """
+        try:
+            cap = Registry(project, replay=app.state.replay).config.budget.max_calls_per_run
+        except ConfigError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        levels: dict[str, Any] = {}
+        for level in verification_mod.LEVELS:
+            try:
+                bill = verify_role.plan(project, node_id, level=level)
+            except ops.OpError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            levels[level] = {
+                "floor": bill.floor,
+                "cached": bill.cached,
+                "jobs": [
+                    {"job": job, "records": total, "cached": cached, "calls": calls}
+                    for job, (total, cached, calls) in bill.jobs.items()
+                ],
+                "fits": cap is None or bill.floor <= cap,
+            }
+        return {"node": node_id, "cap": cap, "levels": levels}
+
     @app.post("/api/jobs/verify/{node_id}")
     def api_verify(node_id: str, body: VerifyBody | None = None) -> dict[str, Any]:
         level = (body.level if body else None) or verification_mod.STANDARD
@@ -850,6 +883,10 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
                 "statement_audit": report.statement_audit,
                 "panel_ran": report.panel_ran,
                 "panel": report.panel,
+                # Set when the cap stopped confirmation. The verdict is still
+                # recorded, but some objections were never re-read, so the UI has
+                # to say so rather than present them as confirmed findings.
+                "confirm_stopped": report.confirm_stopped,
                 "flags": [f.to_record() for f in report.flags],
                 "withdrawn": [
                     {"kind": f.kind, "why": f.why, "resolved": why} for f, why in report.withdrawn

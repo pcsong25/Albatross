@@ -120,16 +120,29 @@ agents:
   panel: [verifier_a, verifier_b]
 
 budget:
-  # A run stops before the call that would cross either cap.
+  # These apply to ANY run, including a single `bp verify` — not only to a recompile.
+  # That is worth saying plainly because the keys used to be spelled
+  # `*_per_recompile`, which read as though one node could not reach them. It can: a
+  # `deep` verify of a node citing fifteen lemmas with twenty ledger claims is
+  # thirty-nine calls. The old spellings still work.
+  #
+  # A verification prices its whole worklist before the first call and refuses a node
+  # the remaining budget cannot finish, rather than spending the cap and recording
+  # nothing — a verification stopped part-way is not recorded, because "no objection
+  # in all 36 checks" and "no objection in the 30 we could afford" are different
+  # claims. So a cap that is too low costs you a message, not money.
+  #
+  #   bp verify <node> --level deep --dry-run     the exact bill for one node
+  #   bp recompile --dry-run --level deep         the bill for the whole run
+  #
+  # `--level` is the knob that actually controls cost. `--batch 5` asks the narrow
+  # checks five per call, which is cheaper and less reliable.
   #
   # The dollar cap only constrains calls whose price is known. A subscription CLI
   # reports no price, so with CLI backends the CALL CAP is the only thing limiting
   # a run — keep it set.
-  #
-  # `bp recompile --dry-run --level deep` prints the bill before you pay it, and
-  # `--level` is the knob that actually controls cost.
-  per_recompile_usd: 3.0
-  max_calls_per_recompile: 40
+  per_run_usd: 3.0
+  max_calls_per_run: 80
 
 # Published list prices, US dollars per million tokens, used for the --dry-run
 # estimate and the dollar cap. The defaults in bp/agents/registry.py cover the

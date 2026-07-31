@@ -114,7 +114,27 @@ class TestReads:
         small(project)
         data = client.get("/api/agents").json()
         assert {r["role"] for r in data["roles"]} >= {"decomposer", "verifier_a"}
-        assert "max_calls_per_recompile" in data["budget"]
+        assert "max_calls_per_run" in data["budget"]
+
+    def test_the_verify_dialog_can_price_a_node_before_the_button_is_live(
+        self, client, project
+    ):
+        """How big a node is is the one thing the user cannot find out any other way,
+        and the old answer was a budget error after paying for it."""
+        small(project)
+        data = client.get("/api/verify/plan/t").json()
+        assert set(data["levels"]) == {"quick", "standard", "deep"}
+        quick, deep = data["levels"]["quick"], data["levels"]["deep"]
+        assert quick["floor"] == 2  # the two panel members and nothing else
+        assert deep["floor"] > quick["floor"]
+        assert all(level["fits"] for level in data["levels"].values())
+        jobs = {row["job"]: row for row in deep["jobs"]}
+        assert jobs["obligations"]["records"] == 1
+        assert data["cap"] == 80
+
+    def test_pricing_a_node_that_does_not_exist_is_a_404(self, client, project):
+        small(project)
+        assert client.get("/api/verify/plan/nope").status_code == 404
 
 
 class TestRender:

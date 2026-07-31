@@ -1427,3 +1427,66 @@ are worth reading (`bp calls --show <hash>`) — but replay now *misses* on most
 because the log is keyed on a prompt hash and several prompts have changed since. A miss
 is a loud `ReplayMiss`, not a silent fall-through to the network, which is the intended
 behaviour and is what the README says.
+
+---
+
+## D061 — A verification prices its worklist before it spends anything
+
+**Date** 2026-07-30 · **Milestone** L3 (friction log)
+
+The user ran `bp verify thm.main --level deep`. It made forty calls, hit the cap, and
+recorded nothing. They asked, reasonably, why one node cost so much and what to do.
+
+**The arithmetic.** That node had 15 discharge obligations and 21 ledger claims. At
+`deep` that is 15 + 21 narrow checks, two panel members and a statement audit — **39
+calls before a single confirmation**, against a configured cap of 40. It could not
+have finished. Nothing in the system said so; the only way to find out was to pay.
+
+**Three separate faults, all in the same direction.**
+
+1. **The cap was checked per call, never against the worklist.** Every worklist a
+   verification consumes is computed by code from files on disk. The exact number was
+   available for free before the first call and was never computed.
+2. **Failing closed was correct and maximally expensive.** A verification stopped
+   part-way must not be recorded — "no objection in all 36 checks" and "no objection
+   in the 30 we could afford" are different claims, and only the first is worth
+   anything. So the run threw. Right decision, worst possible timing.
+3. **The cache was saved only on a clean exit.** `_check_records` wrote its answers
+   at the end of the function, so a cap firing mid-worklist discarded every answer it
+   had already paid for. The retry then re-billed from zero and died in the same
+   place. **A worklist longer than the budget could never be got past, however many
+   times you paid for it.**
+
+**Decision.**
+
+- `roles/verify.plan()` prices a node: records, cache hits and calls per job. It is
+  deterministic, needs no credentials, and is exposed three ways —
+  `bp verify <node> --dry-run`, `GET /api/verify/plan/<id>`, and the browser's Verify
+  dialog, which shows it per level *before the button is live*.
+- `verify()` calls it first and raises `BudgetExceeded` **before the first call** when
+  the remaining budget cannot finish, naming the arithmetic and the three remedies.
+  Forty wasted calls become an instant free message.
+- `_check_records` banks the cache in a `finally`. Nothing paid for is discarded, so
+  a re-run resumes rather than restarting.
+- Confirmation **degrades instead of throwing**. It is the last step, so by the time
+  it runs the two whole-proof passes — the most expensive calls in the run, and the
+  only ones never cached — are already bought. The verification is now recorded, and
+  every objection nobody could re-read is marked `NOT CONFIRMED` in the node file and
+  in the document. The verdict still errs safe: unconfirmed objections keep the node
+  out of `verified`.
+
+**Also: the caps are `*_per_run`, not `*_per_recompile`.** The old names said the cap
+applied to a recompile, and the user reasonably read "40 calls per recompile" as not
+constraining one node. Both old spellings are accepted forever — a config file that
+stops working is a worse cost than two spellings — and `bp agents` now prints "per
+run" with a note that one deep verify can reach it. The default rises 40 → 80, which
+fits a `deep` verify of a realistically sized node.
+
+**What this cost, generalised.** A cap whose limit is checked per call, over a
+worklist whose length is known in advance, is a cap that can only be discovered by
+spending. Every budget in this system now prices the work first.
+
+**What would reverse it.** Nothing about the pre-flight. The one honest cost is that
+`plan` over-counts when a role's backend is unusable — a failing call is free, so the
+plan can refuse a run that would have squeezed through. `bp agents` already reports
+unusable backends, and refusing with visible arithmetic beats spending silently.

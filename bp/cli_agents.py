@@ -139,8 +139,9 @@ def register(app: typer.Typer) -> None:
         console.print(f"call log: {len(log)} recorded call(s) in {log.directory}")
         budget = registry.config.budget
         console.print(
-            f"budget: ${budget.per_recompile_usd} and "
-            f"{budget.max_calls_per_recompile} call(s) per recompile"
+            f"budget: ${budget.per_run_usd} and {budget.max_calls_per_run} call(s) "
+            "per run — a single `bp verify --level deep` on a large node can reach "
+            "this. `bp verify <node> --level deep --dry-run` prices one node."
         )
 
     @app.command()
@@ -274,6 +275,9 @@ def register(app: typer.Typer) -> None:
         ),
         obligations_only: bool = typer.Option(False, "--obligations-only"),
         proof_only: bool = typer.Option(False, "--proof-only"),
+        dry_run: bool = typer.Option(
+            False, "--dry-run", help="print the bill and make no calls"
+        ),
         dry: bool = typer.Option(
             False, "--no-record", help="report without writing a verdict to the node"
         ),
@@ -285,8 +289,31 @@ def register(app: typer.Typer) -> None:
         audit. Which level produced a verdict is recorded on the node, because a
         node verified at `quick` and one verified at `deep` are not making the same
         claim.
+
+        `--dry-run` prints what it would cost. Worth doing on a big node: every
+        worklist is computed from the files, so the count is exact.
         """
         registry = _registry(root, replay)
+        if dry_run:
+            bill = _run(
+                verify_role.plan,
+                registry.project,
+                node_id,
+                level=level,
+                batch=batch,
+            )
+            cap = registry.config.budget.max_calls_per_run
+            console.print(Text(f"{node_id} at --level {level}\n"))
+            for line in bill.lines():
+                console.print(Text("  " + line))
+            console.print(
+                Text(
+                    f"\n  at least {bill.floor} call(s), plus one per objection"
+                    + (f"; the cap allows {cap} per run" if cap else "; no call cap set")
+                    + (f"\n  {bill.cached} answer(s) already cached" if bill.cached else "")
+                )
+            )
+            return
         report = _run(
             verify_role.verify,
             registry.project,

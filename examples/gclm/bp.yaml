@@ -151,8 +151,8 @@ budget:
   # hundred. `bp recompile --dry-run --level deep` prints the bill before you pay
   # it, and `--level` is the knob that actually controls cost. Keep the call cap
   # set — at `max` effort, forty calls is a long afternoon.
-  per_recompile_usd: 3.0
-  max_calls_per_recompile: 40
+  per_run_usd: 3.0
+  max_calls_per_run: 80
 
 # Published list prices, US dollars per million tokens, for `--dry-run`
 # estimates. Subscription backends report no price, so nothing here applies to

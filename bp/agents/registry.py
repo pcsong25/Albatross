@@ -147,10 +147,31 @@ DEFAULT_PANEL = ("verifier_a", "verifier_b")
 
 
 class BudgetConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    """The caps. They apply to *any* run, not only to a recompile.
 
-    per_recompile_usd: float | None = 3.0
-    max_calls_per_recompile: int | None = 40
+    Both keys were originally named ``*_per_recompile``, which was accurate when a
+    recompile was the only thing that made many calls and is misleading now: a
+    single ``bp verify --level deep`` on a node with thirty obligations makes forty.
+    A user read "40 calls per recompile", reasonably concluded it did not constrain
+    one node, and lost the whole cap to a run that needed forty-one.
+
+    So the names are ``per_run``, the old ones are accepted as aliases forever — a
+    config file that stops working is a worse cost than two spellings — and
+    ``bp agents`` prints the cap with the words "per run" next to it.
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    per_run_usd: float | None = Field(default=3.0, alias="per_recompile_usd")
+    max_calls_per_run: int | None = Field(default=80, alias="max_calls_per_recompile")
+
+    @property
+    def per_recompile_usd(self) -> float | None:
+        return self.per_run_usd
+
+    @property
+    def max_calls_per_recompile(self) -> int | None:
+        return self.max_calls_per_run
 
 
 class Config(BaseModel):

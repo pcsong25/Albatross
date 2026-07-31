@@ -1179,8 +1179,8 @@ agents:
     auditor:    {backend: claude_cli, model: opus}
     prover:     {backend: claude_cli, model: sonnet}
 budget:
-  per_recompile_usd: 3.0
-  max_calls_per_recompile: 40
+  per_run_usd: 3.0
+  max_calls_per_run: 80
 ```
 
 That indirection costs a layer and earns three things.

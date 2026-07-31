@@ -12,7 +12,7 @@ import copy
 import pytest
 
 from bp import ops
-from bp.agents.base import AgentError
+from bp.agents.base import AgentError, Budget, BudgetExceeded
 from bp.checks import load_graph
 from bp.roles import check as check_role
 from bp.roles import context as context_mod
@@ -1198,3 +1198,154 @@ class TestCrossReferenceContext:
         write_node(project, "t", target=True, proof="A plain argument.", statement="S.")
         graph = graph_of(project)
         assert context_mod.xref_block(graph, graph["t"]) == ""
+
+
+class TestTheBillIsKnownBeforeAnythingIsSpent:
+    """Every worklist a verification consumes is computed from the files, so the
+    number of calls is exact before the first one. It used to be discovered by
+    spending: a user's `deep` verify of a node with 15 obligations and 21 ledger
+    claims needed 39 calls against a cap of 40, spent all forty, and recorded
+    nothing — because a verification that ran out part-way must not be recorded.
+    Forty calls for an error message, with no way to see it coming.
+    """
+
+    def _big(self, project, obligations: int):
+        """A target citing `n` children, so `n` discharge obligations."""
+        kids = [f"c{i}" for i in range(obligations)]
+        write_node(
+            project,
+            "t",
+            target=True,
+            children=kids,
+            proof="By " + " and ".join(f"`{k}`" for k in kids) + " we are done.",
+            hypotheses=[{"id": "H1", "tex": "a > 0"}],
+            uses={k: {"applied_to": "x", "discharges": {"H1": "hypothesis:H1"}} for k in kids},
+        )
+        for k in kids:
+            write_node(project, k, statement=f"Lemma {k}.",
+                       hypotheses=[{"id": "H1", "tex": "a > 0"}])
+
+    def test_the_plan_counts_every_job_without_making_a_call(self, project):
+        self._big(project, 4)
+        # A registry with no scripted replies at all: any call raises, so a plan
+        # that returns is a plan that spent nothing.
+        registry = scripted_registry(project)
+        bill = verify_role.plan(project, "t", level="standard")
+        assert bill.jobs["obligations"] == (4, 0, 4)
+        assert bill.jobs["whole proof"] == (2, 0, 2)
+        assert bill.floor == 4 + 2 + bill.jobs["extract"][2]
+        assert registry.budget.calls == 0
+
+    def test_deep_prices_the_claim_checks_too(self, project):
+        self._big(project, 3)
+        standard = verify_role.plan(project, "t", level="standard")
+        deep = verify_role.plan(project, "t", level="deep")
+        # +1 for the statement audit; the claim ledger is empty until extraction
+        # runs, which is why `deep` on a node with claims is so much larger.
+        assert deep.floor == standard.floor + 1
+        assert "claims" in deep.jobs and "audit" in deep.jobs
+        assert "claims" not in standard.jobs
+
+    def test_batching_divides_the_narrow_checks(self, project):
+        self._big(project, 10)
+        assert verify_role.plan(project, "t", level="standard", batch=1).jobs["obligations"][2] == 10
+        assert verify_role.plan(project, "t", level="standard", batch=5).jobs["obligations"][2] == 2
+        assert verify_role.plan(project, "t", level="standard", batch=4).jobs["obligations"][2] == 3
+
+    def test_a_verification_the_cap_cannot_finish_is_refused_for_free(self, project):
+        self._big(project, 12)
+        registry = scripted_registry(
+            project,
+            obligation=[json_reply({"entails": True, "why": "ok"})] * 12,
+            verifier_a=[json_reply({"checked": ["all"], "objections": []})],
+            verifier_b=[json_reply({"checked": ["all"], "objections": []})],
+        )
+        registry.budget = Budget(max_calls=5)
+        with pytest.raises(BudgetExceeded) as caught:
+            verify_role.verify(project, "t", registry=registry)
+        message = str(caught.value)
+        assert "needs at least" in message and "obligations 12" in message
+        assert "max_calls_per_run" in message and "--level standard" in message
+        # The whole point: nothing was spent finding this out.
+        assert registry.budget.calls == 0
+        assert graph_of(project)["t"].local_status == "unverified"
+
+    def test_a_cap_that_fits_still_runs(self, project):
+        self._big(project, 2)
+        registry = scripted_registry(
+            project,
+            obligation=[json_reply({"entails": True, "why": "ok"})] * 2,
+            verifier_a=[json_reply({"checked": ["all"], "objections": []})],
+            verifier_b=[json_reply({"checked": ["all"], "objections": []})],
+        )
+        registry.budget = Budget(max_calls=verify_role.plan(project, "t").floor)
+        report = verify_role.verify(project, "t", registry=registry)
+        assert report.verdict == "verified"
+
+    def test_answers_already_bought_do_not_appear_in_the_bill(self, project):
+        self._big(project, 3)
+        registry = scripted_registry(
+            project,
+            obligation=[json_reply({"entails": True, "why": "ok"})] * 3,
+            verifier_a=[json_reply({"checked": ["all"], "objections": []})],
+            verifier_b=[json_reply({"checked": ["all"], "objections": []})],
+        )
+        before = verify_role.plan(project, "t", level="standard")
+        assert before.jobs["obligations"][2] == 3
+        verify_role.verify(project, "t", registry=registry)
+        after = verify_role.plan(project, "t", level="standard")
+        assert after.jobs["obligations"] == (3, 3, 0)
+        assert after.cached == 3
+
+
+class TestNothingPaidForIsThrownAway:
+    def test_the_cap_mid_worklist_keeps_the_answers_already_bought(self, project):
+        """`_check_records` saved its cache only on the way out of a clean run, so a
+        cap that fired part-way through discarded every answer it had paid for. The
+        retry then re-billed from zero and died in the same place: a worklist longer
+        than the budget could never be got past, however many times you paid for it.
+        """
+        TestTheBillIsKnownBeforeAnythingIsSpent()._big(project, 6)
+        registry = scripted_registry(
+            project, obligation=[json_reply({"entails": True, "why": "ok"})] * 6
+        )
+        registry.budget = Budget(max_calls=4)
+        with pytest.raises(BudgetExceeded):
+            verify_role.verify_obligations(project, "t", registry=registry)
+        # Four calls were made and four answers are on disk, so the next run starts
+        # from four rather than from zero.
+        assert registry.budget.calls == 4
+        assert len(verify_role.load_cache(project)) == 4
+        assert verify_role.plan(project, "t", level="standard").jobs["obligations"] == (6, 4, 2)
+
+    def test_the_cap_during_confirmation_still_records_the_verification(self, project):
+        """Confirmation is the last step, so by the time it runs the two whole-proof
+        passes — the most expensive calls in the run, and the only ones never cached —
+        are already paid for. Throwing here discarded all of it. Now it degrades:
+        remaining objections stand unconfirmed and are marked as such.
+        """
+        write_node(project, "t", target=True, proof="An argument.", statement="S.")
+        objection = json_reply({
+            "checked": ["the argument"],
+            "objections": [
+                {"quote": "An argument.", "kind": "gap", "why": "step two is missing"},
+                {"quote": "An argument.", "kind": "gap", "why": "step three is missing"},
+            ],
+        })
+        registry = scripted_registry(
+            project,
+            verifier_a=[objection],
+            verifier_b=[json_reply({"checked": ["all"], "objections": []})],
+            confirmer=[json_reply({"upheld": True, "why": "it is missing"})],
+        )
+        registry.budget = Budget(max_calls=3)  # two panel members, one confirmation
+        report = verify_role.verify(project, "t", registry=registry, level="quick")
+        assert report.confirm_stopped and "call cap" in report.confirm_stopped
+        assert report.verdict != "verified"
+        # Both objections survive, and the one nobody could re-read says so — in the
+        # node file, which is where objections are actually read.
+        node = graph_of(project)["t"]
+        assert len(node.flags) == 2
+        unconfirmed = [f for f in node.flags if "NOT CONFIRMED" in f.why]
+        assert len(unconfirmed) == 1
+        assert "max_calls_per_run" in unconfirmed[0].why

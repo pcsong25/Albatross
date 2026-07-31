@@ -224,6 +224,9 @@ class VerifyReport:
     panel_ran: int = 0
     panel: dict[str, str] = field(default_factory=dict)
     statement_audit: str = verification.NOT_RUN
+    #: Set when the call cap stopped the confirmation pass. The verification is
+    #: still recorded — see `confirm` — but its objections are not all confirmed.
+    confirm_stopped: str = ""
     models: dict[str, str] = field(default_factory=dict)
     flags: list[Flag] = field(default_factory=list)
     withdrawn: list[tuple[Flag, str]] = field(default_factory=list)
@@ -235,6 +238,162 @@ class VerifyReport:
     @property
     def reasons(self) -> list[str]:
         return verification.reasons(self.record) if self.record is not None else []
+
+
+# --- the bill, before anything is spent ---------------------------------------
+#
+# Every worklist a verification consumes is computed by code from files on disk, so
+# the number of calls is known *exactly* before the first one is made. Discovering
+# it by spending the budget and failing was the original behaviour, and it cost a
+# user forty calls — the whole cap — on a node whose `deep` level needed forty-one.
+# Nothing was recorded, because a truncated worklist must never be recorded as a
+# verification. Forty calls, no result, and no way to tell in advance.
+#
+# The only genuinely unpredictable term is confirmation: one call per objection, and
+# how many objections there will be is the thing being asked. So the plan reports a
+# floor and says so.
+
+
+@dataclass
+class VerifyPlan:
+    """What a verification of one node will cost, per job, before it starts."""
+
+    node: str
+    level: str
+    #: job -> (records, of those already cached, calls it will therefore make)
+    jobs: dict[str, tuple[int, int, int]] = field(default_factory=dict)
+    #: Calls the plan is certain about: everything except confirmation.
+    calls: int = 0
+    #: Cache hits, i.e. calls not being made because the answer is already bought.
+    cached: int = 0
+
+    @property
+    def floor(self) -> int:
+        """The smallest number of calls that can finish: ``calls`` plus nothing
+        confirmed. One objection makes it one more."""
+        return self.calls
+
+    def lines(self) -> list[str]:
+        out = []
+        for job, (total, cached, calls) in self.jobs.items():
+            note = f"   ({cached} of {total} already cached)" if cached else ""
+            out.append(f"{job:<12} {calls:>3} call(s){note}")
+        out.append(f"{'confirm':<12}   ? one per objection raised above")
+        return out
+
+
+def plan(
+    project: Project,
+    node_id: str,
+    *,
+    level: str = verification.STANDARD,
+    use_cache: bool = True,
+    batch: int = 1,
+) -> VerifyPlan:
+    """Count the calls a ``verify`` of this node at this level would make.
+
+    Deterministic: reads the node files and the answer cache, makes no call, and
+    needs no credentials. This is what ``--dry-run`` prints and what the browser
+    shows before the button is live.
+    """
+    from ..ledger import claim_obligations_for, ledger_is_stale
+
+    graph, _, _ = load_graph(project)
+    node = graph.get(node_id)
+    if node is None:
+        raise ops.OpError(f"no node {node_id!r}")
+    jobs = jobs_for(level)
+    cache = load_cache(project) if use_cache else {}
+    out = VerifyPlan(node=node_id, level=level)
+    size = max(1, int(batch))
+
+    def worklist(name: str, records: list[dict[str, Any]], batched: bool) -> None:
+        total = len(records)
+        cached = sum(1 for r in records if r["hash"] in cache) if use_cache else 0
+        pending = total - cached
+        # Batching only applies to the plain entailment shape; see `_answer_pending`.
+        calls = -(-pending // size) if batched else pending
+        out.jobs[name] = (total, cached, calls)
+        out.calls += calls
+        out.cached += cached
+
+    if "extract" in jobs:
+        needed = 1 if node.has_proof and (not node.claims or ledger_is_stale(node)) else 0
+        out.jobs["extract"] = (needed, 0, needed)
+        out.calls += needed
+    if "obligations" in jobs:
+        records = [r for r in obligations_for(node, graph) if r["kind"] != "admitted"]
+        worklist("obligations", records, batched=True)
+    if "references" in jobs:
+        index = xref_mod.index_for(graph)
+        worklist("references", xref_mod.reference_obligations_for(node, graph, index), False)
+    if "claims" in jobs:
+        worklist("claims", claim_obligations_for(node, graph), batched=False)
+    if "whole_proof" in jobs:
+        members = len(registry_panel(project))
+        out.jobs["whole proof"] = (members, 0, members)
+        out.calls += members
+    if "audit" in jobs:
+        out.jobs["audit"] = (1, 0, 1)
+        out.calls += 1
+    return out
+
+
+def registry_panel(project: Project) -> list[str]:
+    from ..agents.registry import load_config
+
+    return list(load_config(project).panel)
+
+
+def _preflight(
+    project: Project,
+    node_id: str,
+    registry: Registry,
+    *,
+    level: str,
+    batch: int,
+) -> VerifyPlan:
+    """Refuse a verification the budget cannot finish, *before* it costs anything.
+
+    A cap that stops a run part-way through an enumerated worklist cannot be
+    honoured by truncating it: "no objection in all 36 checks" and "no objection in
+    the 30 checks we could afford" are different claims, and only the first is worth
+    anything. So the run fails closed and records nothing — correct, and previously
+    also the most expensive possible way to find out.
+
+    The arithmetic is available for free. Doing it first turns forty wasted calls
+    into an instant message with a number in it.
+    """
+    budget = registry.budget
+    cap = budget.max_calls
+    if cap is None:
+        return plan(project, node_id, level=level, batch=batch)
+    bill = plan(project, node_id, level=level, batch=batch)
+    remaining = cap - budget.calls
+    # No headroom is reserved for confirmation. It is the last step and it now
+    # degrades rather than throwing (see `confirm`), so a run that fits everything
+    # else is worth starting even if the objections go unconfirmed.
+    if bill.floor <= remaining:
+        return bill
+    detail = "; ".join(
+        f"{job} {calls}" for job, (_, _, calls) in bill.jobs.items() if calls
+    )
+    raise BudgetExceeded(
+        # Opens with "call cap" so it reads as one of the budget family rather than
+        # as a new class of failure: this is the same stop, moved earlier.
+        f"call cap: a `{level}` verification of {node_id} needs at least "
+        f"{bill.floor} calls "
+        f"({detail}), plus one per objection raised — and the cap allows "
+        f"{remaining} more. Refusing before spending anything, because a "
+        f"verification that runs out part-way is not recorded and the calls are "
+        f"wasted.\n"
+        f"  * raise `budget.max_calls_per_run` in bp.yaml (currently {cap})\n"
+        f"  * or use a cheaper level: `--level standard` drops the claim checks "
+        f"and the statement audit\n"
+        f"  * or `--batch 5` to ask the narrow checks five per call\n"
+        f"Run `bp verify {node_id} --level {level} --dry-run` for the full bill. "
+        f"Answers already bought are cached, so a re-run only pays for what is left."
+    )
 
 
 # --- the record cache ---------------------------------------------------------
@@ -427,6 +586,47 @@ def _check_records(
             pending.append(record)
 
     size = max(1, int(batch))
+    try:
+        _answer_pending(
+            pending,
+            out,
+            calls,
+            cache,
+            agent=agent,
+            system=system,
+            render=render,
+            schema=schema,
+            timeout=timeout,
+            size=size,
+            use_cache=use_cache,
+        )
+    finally:
+        # Whatever was answered before the exception has been paid for, and the
+        # question it answers has not changed. Banking it in a `finally` is the
+        # difference between a run that can be resumed and a cap that can never be
+        # got past: without this, a worklist longer than the budget lost every
+        # answer it had bought, so the retry re-billed from zero and died in the
+        # same place, forever.
+        if use_cache:
+            save_cache(project, cache)
+    return out, cached_count, calls
+
+
+def _answer_pending(
+    pending: list[dict[str, Any]],
+    out: list[tuple[dict[str, Any], Any]],
+    calls: list[CallMeta],
+    cache: dict[str, dict[str, Any]],
+    *,
+    agent,
+    system: str,
+    render,
+    schema: type[BaseModel],
+    timeout: float,
+    size: int,
+    use_cache: bool,
+) -> None:
+    """The billing loop, split out so its caller can bank the cache on any exit."""
     for start in range(0, len(pending), size):
         chunk = pending[start : start + size]
         if len(chunk) == 1 or schema is not ObligationVerdict:
@@ -464,10 +664,6 @@ def _check_records(
             out.append((record, verdict))
             if use_cache:
                 cache[record["hash"]] = {"id": record["id"], "verdict": verdict.model_dump()}
-
-    if use_cache:
-        save_cache(project, cache)
-    return out, cached_count, calls
 
 
 def verify_obligations(
@@ -809,7 +1005,13 @@ def confirm(
     report.models.setdefault("confirm", agent.model)
 
     surviving: list[Flag] = []
-    for flag in report.flags:
+    for index, flag in enumerate(report.flags):
+        if report.confirm_stopped:
+            # The cap was reached earlier in this loop. Every remaining objection
+            # stands unconfirmed, which is the same direction the AgentError branch
+            # below errs in: an objection nobody could re-read is kept.
+            surviving.append(_unconfirmed(flag))
+            continue
         user = context.join(
             "## The objection",
             f"- Class: {flag.kind}\n- Section: {flag.section}\n"
@@ -823,7 +1025,18 @@ def confirm(
         )
         try:
             outcome, meta = agent.complete(system, user, Confirmation, timeout)
-        except (BudgetExceeded, ReplayMiss):
+        except BudgetExceeded as exc:
+            # Confirmation is the last step, so the whole-proof passes — the two most
+            # expensive calls in the run, and the only ones that are never cached —
+            # have already been paid for. Letting the cap throw here discarded all of
+            # it and recorded nothing, so the user paid for a verification and got an
+            # error message. Instead: stop confirming, keep every remaining objection
+            # unconfirmed, and record. Unconfirmed objections keep the node out of
+            # `verified`, so the verdict still errs the safe way.
+            report.confirm_stopped = str(exc)
+            surviving.append(_unconfirmed(flag))
+            continue
+        except ReplayMiss:
             raise
         except AgentError:
             surviving.append(flag)  # cannot confirm; err toward keeping it
@@ -846,6 +1059,23 @@ def confirm(
         if not still:
             report.panel[role] = verification.OBJECTION_WITHDRAWN
     return report
+
+
+#: What is appended to an objection the confirmer never got to read. It lands in the
+#: node file and in the rendered document, which is where objections are actually
+#: read — an unconfirmed objection that looked identical to a confirmed one would be
+#: a quiet downgrade in the evidence, and this system's whole job is to not do that.
+UNCONFIRMED = (
+    " [NOT CONFIRMED: the call cap was reached before this objection could be "
+    "re-read in context, so it may be pedantry. Raise budget.max_calls_per_run or "
+    "re-run — the narrow checks are cached, so a re-run is cheap.]"
+)
+
+
+def _unconfirmed(flag: Flag) -> Flag:
+    if UNCONFIRMED not in flag.why:
+        flag.why = flag.why + UNCONFIRMED
+    return flag
 
 
 def claims_block(node) -> str:
@@ -898,6 +1128,7 @@ def verify(
             "without writing a verdict."
         )
     report = VerifyReport(node=node_id, level=level)
+    _preflight(project, node_id, registry, level=level, batch=batch)
 
     if "extract" in jobs and obligations:
         _refresh_ledger(project, node_id, registry=registry, report=report)

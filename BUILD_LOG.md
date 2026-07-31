@@ -919,3 +919,43 @@ pytest -q       598 passed
 bp status       (from the root) error: no nodes/ directory — correct
 bp check        (in examples/gclm) 2 deliberate errors
 ```
+
+### Forty calls for an error message
+
+The user verified their target at `--level deep` and got "budget exceeded (40 calls)".
+They asked why one node was so expensive.
+
+Because that node had 15 discharge obligations and 21 ledger claims, so `deep` needed
+39 calls before confirmation, against a cap of 40. It could not have finished. Three
+things made that worse than it had to be:
+
+The cap was enforced per call and never compared against the worklist — even though
+every worklist is computed by code from the files, so the number was free. Failing
+closed was right (a truncated verification is not recorded) but happened at the last
+possible moment. And `_check_records` saved its answer cache only on a clean exit, so
+a cap firing mid-worklist threw away every answer already bought — meaning the retry
+re-billed from zero and died in the same place. A worklist longer than the budget
+could never be got past, however many times you paid for it.
+
+Now: `verify.plan()` prices a node deterministically, and `verify` refuses **before
+the first call** if the budget cannot finish, with the arithmetic and the remedies in
+the message. `bp verify <node> --level deep --dry-run` prints the bill, and so does
+the browser's Verify dialog, per level, before the button is live. The cache is banked
+in a `finally`. And confirmation degrades rather than throwing — by the time it runs
+the two whole-proof passes are already paid for, so the verification is recorded and
+the objections nobody could re-read are marked `NOT CONFIRMED` in the node file and in
+the document.
+
+The caps are also renamed `*_per_run` (old spellings still accepted) because
+"per_recompile" is what made 40 sound generous for one node, and the default rises to
+80.
+
+```
+pytest                                             613 passed
+bp verify thm.main --level deep --dry-run          3 calls; 21 of 21 claims cached
+bp verify thm.main --level deep   (cap 2)          refused, 0 calls spent
+```
+
+The user's own re-run is now three calls rather than thirty-nine: the 21 claim answers
+they had already paid for survived, because the jobs that completed had saved their
+caches. That was luck — the cap fired between jobs. The `finally` makes it a guarantee.

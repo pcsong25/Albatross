@@ -755,8 +755,8 @@ agents:
     auditor:    {backend: claude_cli, model: opus}
     prover:     {backend: claude_cli, model: sonnet}
 budget:
-  per_recompile_usd: 3.0
-  max_calls_per_recompile: 40
+  per_run_usd: 3.0
+  max_calls_per_run: 80
 ```
 
 **The tiering is deliberate and it is where the bill is decided.** `extractor` is
@@ -815,6 +815,43 @@ second one costs the same either way.
 price is known. A subscription CLI reports no price at all, so with CLI backends
 the **call cap** is the only thing limiting a run. Keep it set.
 
+**Both caps apply to any run, including one `bp verify`.** They were originally
+spelled `*_per_recompile`, which read as though a single node could not reach them.
+It can, easily: a `deep` verify of a node citing fifteen lemmas, whose proof has
+twenty-one ledger claims, is *thirty-nine calls* — one per obligation, one per claim,
+two panel members, a statement audit — plus one per objection. The old spellings are
+still accepted.
+
+**Price a node before you verify it:**
+
+```
+$ bp verify thm.main --level deep --dry-run
+thm.main at --level deep
+
+  extract        0 call(s)
+  obligations   15 call(s)
+  claims        21 call(s)
+  whole proof    2 call(s)
+  audit          1 call(s)
+  confirm        ? one per objection raised above
+
+  at least 39 call(s), plus one per objection; the cap allows 80 per run
+```
+
+Exact, not an estimate: every worklist is computed from your files. The Verify
+dialog in the browser shows the same numbers, per level, before the button is live.
+
+**A cap that is too low costs a message, not money.** A verification that stops
+part-way is never recorded — "no objection in all 36 checks" and "no objection in
+the 30 we could afford" are different claims, and only the first is worth anything —
+so `verify` prices its worklist first and refuses before spending if the remaining
+budget cannot finish. Raise `max_calls_per_run`, drop to `--level standard`, or use
+`--batch 5`, and re-run: **the answers you already bought are cached**, so a second
+attempt only pays for what is left. If the cap is reached during the final
+confirmation pass, the verification *is* recorded — the expensive whole-proof passes
+are already paid for by then — and the objections nobody could re-read are marked
+`NOT CONFIRMED` in the node file and in the document.
+
 **API is much faster than a subscription CLI** — seconds against minutes on a
 decomposition prompt. If you have a key, use it for the decomposer at least.
 
@@ -830,6 +867,12 @@ a level decides how much the run costs in the first place.
 A ten-claim proof is roughly fifteen calls at `deep`, so a thirty-node graph is
 several hundred. Always look at `bp recompile --dry-run --level deep` before
 running it; it prints the nodes, the jobs per node, the call count and a cost.
+
+**The single biggest waste is putting `extractor` and `obligation` on a top model at
+maximum reasoning.** Between them they make most of the calls at `deep`, and neither
+is doing mathematics: the extractor lists what a proof claims, and the obligation
+role answers one narrow yes/no at a time. A maximum-effort setting there buys almost
+nothing and multiplies the slowest part of every run by a large factor.
 
 Two things make repeated runs cheap. **Nothing is re-billed**: every question
 carries a content hash and an unchanged question is answered from cache, so editing
