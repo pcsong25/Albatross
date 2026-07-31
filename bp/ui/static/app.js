@@ -1888,8 +1888,11 @@ async function paperSheet() {
   } else {
     const head = el('div', { class: paper.stale ? 'warnbox' : 'row small' });
     head.append(el('div', {}, el('b', {}, paper.title)));
+    // Same shape as the History sheet's timestamps: UTC, readable, no timezone
+    // arithmetic the user has to do in their head.
+    const built = (paper.built_at || '').replace('T', ' ').replace('+00:00', '');
     head.append(el('div', { class: 'small' },
-      `built ${paper.built_at} — ${paper.calls} call(s)` +
+      `built ${built} — ${paper.calls} call(s)` +
       (paper.cost_usd ? `, $${paper.cost_usd.toFixed(2)}` : '')));
     head.append(el('div', { class: 'small' }, paper.staleness.sentence));
     if (paper.stale) {
@@ -1938,6 +1941,8 @@ async function paperSheet() {
     }
     body.append(diagnosticList(paper.diagnostics));
 
+    // Its own heading: under the reservations it read as though it were one of them.
+    body.append(el('h3', { class: 'section' }, 'The file'));
     body.append(el('label', { class: 'small' }, bare,
       ' bare (drop the provenance note and the appendix — for a file going to a journal)'));
   }
