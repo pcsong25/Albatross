@@ -586,6 +586,10 @@ class TestPreambleDefaults:
             "lemma": "Lemma",
             "definition": "Definition",
             "assumption": "Assumption",
+            # Not emitted by the node document; the exposition uses them, and both
+            # are behind `\@ifundefined` so a project defining its own keeps it.
+            "corollary": "Corollary",
+            "remark": "Remark",
         }
 
     def test_latex_comments_are_not_read_as_definitions(self):

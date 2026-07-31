@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 from . import discharge as discharge_mod
 from . import ledger as ledger_mod
@@ -62,6 +63,53 @@ _ESCAPED_DOLLAR_RE = re.compile(r"\\\$")
 _COMMENT_LINE_RE = re.compile(r"(?<!\\)%.*$", re.M)
 
 
+def latex_fragment(text: str, where: str, node: Any = None) -> list[Diagnostic]:
+    """``TEX001``–``TEX002`` over one passage of LaTeX, whoever wrote it.
+
+    Split out of :func:`latex_text` so that anything holding authored or generated
+    LaTeX can be checked the same way — the paper writer's sections are LaTeX with
+    exactly these two failure modes and no node to hang them on. ``where`` names the
+    passage for the message; ``node`` is optional and only decides which file the
+    diagnostic points at.
+    """
+    d: list[Diagnostic] = []
+    if not text.strip():
+        return d
+
+    for m in _MIDLINE_PERCENT_RE.finditer(text):
+        fragment = m.group("before").strip()[-48:]
+        d.append(
+            warn(
+                "TEX001",
+                node,
+                f"a mid-line `%` in the {where} comments out the rest of that "
+                f"line: …{fragment}%",
+                hint="LaTeX drops everything after it, and the document still "
+                "compiles — so the text simply disappears from the PDF. Write "
+                "`\\%` for a percent sign. A `%` at the start of a line is a "
+                "deliberate comment and is not reported.",
+            )
+        )
+
+    # Count dollars outside comments: a `%` really does comment out a `$`.
+    live = _COMMENT_LINE_RE.sub("", text)
+    dollars = _ESCAPED_DOLLAR_RE.sub("", live).count("$")
+    if dollars % 2:
+        d.append(
+            err(
+                "TEX002",
+                node,
+                f"the {where} has an odd number of `$` ({dollars}), so a maths "
+                "delimiter is unclosed",
+                hint="the document will not compile, and in the browser the "
+                "scanner pairs the stray `$` with the next one and typesets the "
+                "prose between them as mathematics. Write `\\$` for a literal "
+                "dollar sign.",
+            )
+        )
+    return d
+
+
 def latex_text(node: Node) -> list[Diagnostic]:
     """``TEX001``–``TEX002``: the two ways authored LaTeX goes wrong in silence.
 
@@ -72,42 +120,7 @@ def latex_text(node: Node) -> list[Diagnostic]:
     """
     d: list[Diagnostic] = []
     for section in (STATEMENT, PROOF):
-        text = node.section(section)
-        if not text.strip():
-            continue
-        where = section.lower()
-
-        for m in _MIDLINE_PERCENT_RE.finditer(text):
-            fragment = m.group("before").strip()[-48:]
-            d.append(
-                warn(
-                    "TEX001",
-                    node,
-                    f"a mid-line `%` in the {where} comments out the rest of that "
-                    f"line: …{fragment}%",
-                    hint="LaTeX drops everything after it, and the document still "
-                    "compiles — so the text simply disappears from the PDF. Write "
-                    "`\\%` for a percent sign. A `%` at the start of a line is a "
-                    "deliberate comment and is not reported.",
-                )
-            )
-
-        # Count dollars outside comments: a `%` really does comment out a `$`.
-        live = _COMMENT_LINE_RE.sub("", text)
-        dollars = _ESCAPED_DOLLAR_RE.sub("", live).count("$")
-        if dollars % 2:
-            d.append(
-                err(
-                    "TEX002",
-                    node,
-                    f"the {where} has an odd number of `$` ({dollars}), so a maths "
-                    "delimiter is unclosed",
-                    hint="the document will not compile, and in the browser the "
-                    "scanner pairs the stray `$` with the next one and typesets the "
-                    "prose between them as mathematics. Write `\\$` for a literal "
-                    "dollar sign.",
-                )
-            )
+        d.extend(latex_fragment(node.section(section), section.lower(), node))
     return d
 
 

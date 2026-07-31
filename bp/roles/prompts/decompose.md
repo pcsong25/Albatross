@@ -27,8 +27,24 @@ and do the work below properly.
 
 # What a good decomposition is
 
-Between 3 and 7 children, each **a section or a major lemma** — the granularity
-of a section heading in a paper, not the granularity of a step.
+Between 1 and 10 children, each **a section or a major lemma** — the granularity
+of a section heading in a paper, not the granularity of a step. Three to seven is
+the usual answer; the range is wider than that because real theorems are not all
+the same shape, and both ends are legitimate for the right node.
+
+**One or two children** is right when the whole content of this node is a
+*reduction*: it follows from one substantial lemma plus an argument that is itself
+real work — a limiting argument, a compactness step, a change of variables. Say
+what the reduction does in `strategy`. It is wrong when the single child is the
+parent restated in other words: if you cannot name what the reduction proves,
+you have decomposed nothing, and `already-atomic` or `prove-directly` is the
+honest answer.
+
+**Eight to ten children** is right for a genuinely long argument — several
+independent estimates, or a construction with distinct stages. It is wrong if you
+are cutting one continuous argument into paragraphs. Each child is verified on its
+own by a reader who sees nothing else, so a "child" that is the middle third of a
+computation is not a lemma and will fail that reading.
 
 **The leaves you propose are expected to be hard and unproved.** Do not try to
 reach provable granularity. Do not decompose recursively. Do not produce a child

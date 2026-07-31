@@ -108,7 +108,7 @@ bp ui                            # http://127.0.0.1:8000
 
 The browser is the intended surface. From there:
 
-1. **Expand** the target — the decomposer proposes 3–7 lemmas, a reduction proof,
+1. **Expand** the target — the decomposer proposes one to ten lemmas, a reduction proof,
    and a complete table saying where every hypothesis of every cited lemma comes
    from. That table is the point: a model cannot fill it in without confronting
    whether its lemmas actually cover the parent, and most insufficient
@@ -118,7 +118,12 @@ The browser is the intended surface. From there:
    thing the tool produces: it is usually a fact about your *decomposition*.
 4. **Verify** — at `quick`, `standard` or `deep`. What ran is recorded on the node
    and printed into the document.
-5. **Render LaTeX** — the paper, with every gap marked.
+5. **Render LaTeX** — the document, generated from your node files, with every gap
+   marked.
+6. **Paper…**, optionally — the same mathematics written up the way a paper is
+   written, by an agent, when you ask for it. It carries a code-generated appendix
+   saying where every node of your development went, because an exposition can lose
+   detail and the loss has to be recoverable.
 
 Everything is also a CLI command; `bp --help` lists them. See
 **[GUIDE.md](GUIDE.md)** for the full manual, including a reference for every
@@ -139,7 +144,8 @@ myproject/
   preamble.tex      your own macros; read by the renderer, the agents AND the browser
   bp.yaml           which model plays which role
   attempts/         what `bp redo` archived before regenerating
-  .bp/              events.jsonl (append-only), the call log, the answer cache, build/
+  .bp/              events.jsonl (append-only), the call log, the answer cache,
+                    build/, and paper/ if you have built the readable write-up
 ```
 
 A node:

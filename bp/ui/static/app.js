@@ -25,7 +25,7 @@
 //: Getting that skew wrong is what produced "Cannot read properties of undefined"
 //: with the action buttons missing, and no way to guess that restarting the server
 //: was the fix.
-const API_VERSION = 4;
+const API_VERSION = 5;
 
 const state = {
   graph: null,
@@ -1089,7 +1089,8 @@ function expandDialog(node, isRedo) {
   body.append(el('p', { class: 'small muted' }, isRedo
     ? 'The current subtree is copied to attempts/ before anything is archived. ' +
       'The previous attempt\'s problems are sent to the decomposer as negative context.'
-    : 'One level. 3–7 children. The leaves are expected to be hard and unproved.'));
+    : 'One level. 1–10 children, usually three to seven. The leaves are expected ' +
+      'to be hard and unproved.'));
   body.append(el('label', { class: 'small muted' }, 'Hint for the decomposer'));
   const area = el('textarea', {});
   area.value = node.strategy || '';
@@ -1395,6 +1396,7 @@ const JOB_LABEL = {
   expand: 'Decomposing', redo: 'Redoing', 'check-decomp': 'Checking the decomposition',
   extract: 'Extracting the claim ledger', audit: 'Auditing the statement',
   verify: 'Verifying', prove: 'Writing a proof', recompile: 'Recompiling', resume: 'Resuming',
+  paper: 'Writing the paper',
 };
 
 async function runJob(kind, nodeId, body) {
@@ -1638,6 +1640,31 @@ function showJobResult(job) {
         body.append(el('div', { class: 'warnbox' }, el('b', {}, 'Named gap: '), gap));
       }
     }
+  } else if (job.kind === 'paper') {
+    body.append(el('p', {}, el('b', {}, result.title || 'The paper'),
+      ` — ${result.sections} section(s) written.`));
+    body.append(el('p', { class: 'small muted' },
+      'Nothing in the development changed: this wrote .bp/paper/paper.json and ' +
+      'nothing else. Open Paper… to read it, download it or compile it.'));
+    for (const item of result.lost || []) {
+      body.append(el('div', { class: 'warnbox' },
+        el('b', {}, 'Not carried over — ' + item.section + ': '), item.text));
+    }
+    if ((result.failed || []).length) {
+      body.append(el('div', { class: 'warnbox' },
+        el('b', {}, 'Sections that could not be written: '), result.failed.join(', '),
+        el('div', { class: 'small' }, 'The paper says so in place of their text.')));
+    }
+    if ((result.unplaced || []).length) {
+      body.append(el('div', { class: 'warnbox' },
+        el('b', {}, 'Nodes the outline never placed: '), result.unplaced.join(', '),
+        el('div', { class: 'small' }, 'They are absent from the paper and named in its ' +
+          'provenance appendix. The development still has them.')));
+    }
+    if (result.stopped) {
+      body.append(el('div', { class: 'warnbox' }, el('b', {}, 'Stopped: '), result.stopped));
+    }
+    body.append(diagnosticList(result.diagnostics));
   } else if (job.kind === 'recompile' || job.kind === 'resume') {
     body.append(el('p', {},
       `verified: ${(result.verified || []).join(', ') || 'none'}`, el('br', {}),
@@ -1745,7 +1772,7 @@ async function renderSheet() {
   const options = el('div', { class: 'editrow' });
   const clean = el('input', { type: 'checkbox', id: 'opt-clean' });
   const audit = el('input', { type: 'checkbox', id: 'opt-audit' });
-  options.append(el('label', { class: 'small' }, clean, ' clean (omit every marker — this is the paper)'));
+  options.append(el('label', { class: 'small' }, clean, ' clean (omit every marker — the development, unadorned)'));
   options.append(el('label', { class: 'small' }, audit, ' audit (include the discharge tables)'));
   body.append(options);
   const pre = el('pre', { class: 'tex' }, 'rendering…');
@@ -1801,6 +1828,16 @@ async function renderSheet() {
     link.click();
   };
 
+  // Where someone looking for a *readable* document will come first. The clean
+  // mode strips the apparatus but not the shape: it is still one numbered node
+  // after another in dependency order, which is not how a paper reads.
+  body.append(el('div', { class: 'row small muted' },
+    'This is generated from your node files every time and is exact. For a version ' +
+    'written the way a paper is written — lemmas merged, hypotheses in prose, ' +
+    'results named rather than cited by id — use ',
+    el('a', { class: 'noderef', onclick: () => { closeSheet(); paperSheet(); } }, 'Paper…'),
+    '. That one is written by an agent, on request, and may lose detail.'));
+
   sheet('The document', body, [
     { label: 'Close', onClick: closeSheet },
     {
@@ -1810,6 +1847,171 @@ async function renderSheet() {
     { label: 'Open PDF', primary: true, onClick: openPdf },
   ]);
   await reload();
+}
+
+/** The optional exposition: an agent's readable write-up of the development.
+ *
+ * Deliberately a separate sheet from Render LaTeX, because it is a different kind
+ * of object and confusing the two would be expensive. The rendered document is
+ * generated from the node files every time and is exact. This one was written once,
+ * by a model, and every claim it makes about being current is a claim about a
+ * timestamp — so the sheet leads with whether the development has moved since, and
+ * with what the writer said it could not carry over.
+ */
+async function paperSheet() {
+  const body = el('div', {});
+  body.append(el('div', { class: 'spinner-row' }, 'Looking for a paper…'));
+  sheet('The paper', body, [{ label: 'Close', onClick: closeSheet }]);
+
+  let paper;
+  try { paper = await api('/api/paper'); }
+  catch (e) { body.textContent = e.message; return; }
+  body.textContent = '';
+
+  body.append(el('p', { class: 'small muted' },
+    'An agent rewrites the development as a paper: hypothesis lists become sentences, ' +
+    'routine lemmas move inside the proofs that use them, and results are named rather ' +
+    'than referred to by node id. It is built only when you ask and is never updated ' +
+    'with the graph. Render LaTeX remains the exact document — where the two disagree, ' +
+    'that one is right.'));
+
+  const bare = el('input', { type: 'checkbox', id: 'opt-bare' });
+  const status = el('div', {});
+
+  if (paper.error) {
+    body.append(el('div', { class: 'warnbox' }, paper.error));
+  }
+
+  if (!paper.exists) {
+    body.append(el('div', { class: 'row small muted' },
+      'No paper has been written for this project yet.'));
+  } else {
+    const head = el('div', { class: paper.stale ? 'warnbox' : 'row small' });
+    head.append(el('div', {}, el('b', {}, paper.title)));
+    head.append(el('div', { class: 'small' },
+      `built ${paper.built_at} — ${paper.calls} call(s)` +
+      (paper.cost_usd ? `, $${paper.cost_usd.toFixed(2)}` : '')));
+    head.append(el('div', { class: 'small' }, paper.staleness.sentence));
+    if (paper.stale) {
+      const moved = []
+        .concat((paper.staleness.changed || []).map((n) => n + ' (edited)'))
+        .concat((paper.staleness.added || []).map((n) => n + ' (new)'))
+        .concat((paper.staleness.removed || []).map((n) => n + ' (gone)'));
+      head.append(el('div', { class: 'small' }, moved.join(', ')));
+      head.append(el('div', { class: 'small' },
+        'The paper still opens and still compiles; it is simply describing an older ' +
+        'version of your development. Write it again to catch up.'));
+    }
+    body.append(head);
+
+    body.append(el('h3', { class: 'section' }, 'Sections'));
+    for (const s of paper.sections) {
+      const row = el('div', { class: s.failed ? 'warnbox' : 'row small' });
+      row.append(el('div', {}, el('b', {}, s.heading),
+        s.failed ? ' — not written' : ` — ${s.stated.length} stated, ${s.merged.length} merged, ${s.words} words`));
+      if (s.failed) row.append(el('div', { class: 'small' }, s.failed));
+      if (s.purpose) row.append(el('div', { class: 'small muted' }, s.purpose));
+      for (const m of s.merged) {
+        row.append(el('div', { class: 'small muted' },
+          el('span', { class: 'mono' }, m.id), ' merged: ' + (m.where || 'no note')));
+      }
+      for (const d of s.departures) {
+        row.append(el('div', { class: 'small muted' }, 'departure: ' + d));
+      }
+      for (const l of s.lost) {
+        row.append(el('div', { class: 'small' }, el('b', {}, 'not carried over: '), l));
+      }
+      body.append(row);
+    }
+
+    if ((paper.unplaced || []).length) {
+      body.append(el('div', { class: 'warnbox' },
+        el('b', {}, 'Absent from the paper: '), paper.unplaced.join(', '),
+        el('div', { class: 'small' }, 'The outline never placed these. They are named ' +
+          'in the provenance appendix.')));
+    }
+    if (paper.notes) {
+      body.append(el('h3', { class: 'section' }, "The writer's reservations"));
+      const notes = el('div', { class: 'prose small' });
+      notes.append(mathProse(paper.notes));
+      body.append(notes);
+    }
+    body.append(diagnosticList(paper.diagnostics));
+
+    body.append(el('label', { class: 'small' }, bare,
+      ' bare (drop the provenance note and the appendix — for a file going to a journal)'));
+  }
+
+  body.append(status);
+
+  const guidance = el('textarea', {});
+  guidance.setAttribute('placeholder',
+    'Optional: how you want it shaped. "Notes rather than a paper", "put the ' +
+    'construction first", "no introduction".');
+  body.append(el('h3', { class: 'section' }, paper.exists ? 'Write it again' : 'Write it'));
+  body.append(guidance);
+
+  let plan;
+  try { plan = await api('/api/paper/plan'); }
+  catch (e) { plan = null; }
+  if (plan) body.append(el('pre', { class: 'tex small' }, plan.text));
+
+  const openPdf = async () => {
+    const query = `?bare=${bare.checked}`;
+    status.textContent = '';
+    status.append(el('div', { class: 'spinner-row' }, 'compiling — two pdflatex passes…'));
+    let report;
+    try { report = await api('/api/paper/compile' + query); }
+    catch (e) { status.textContent = ''; status.append(compileProblem({ message: e.message })); return; }
+    status.textContent = '';
+    for (const w of report.warnings || []) {
+      status.append(el('div', { class: 'warnbox' }, w));
+    }
+    if (!report.ok) { status.append(compileProblem(report.problem || {})); return; }
+    const link = el('a', {
+      class: 'noderef', href: '/api/paper.pdf' + query + '&built=1',
+      target: '_blank', rel: 'noopener',
+    }, 'Open the PDF ▸');
+    status.append(el('div', {}, link));
+    link.click();
+  };
+
+  const actions = [{ label: 'Close', onClick: closeSheet }];
+  if (paper.exists) {
+    actions.push({
+      label: 'Show the LaTeX',
+      onClick: async () => {
+        status.textContent = '';
+        status.append(el('div', { class: 'spinner-row' }, 'assembling…'));
+        try {
+          const tex = await api('/api/paper.source?bare=' + bare.checked);
+          status.textContent = '';
+          status.append(el('pre', { class: 'tex' }, tex));
+        } catch (e) { status.textContent = ''; status.append(el('div', { class: 'warnbox' }, e.message)); }
+      },
+    });
+    actions.push({
+      label: 'Download .tex',
+      onClick: () => { window.location = '/api/paper.tex?bare=' + bare.checked; },
+    });
+    actions.push({ label: 'Open PDF', onClick: openPdf });
+  }
+  actions.push({
+    label: plan ? `Write it (${plan.calls}+ calls)` : 'Write it',
+    primary: true,
+    onClick: () => {
+      closeSheet();
+      runJob('paper', null, { guidance: guidance.value, title: null });
+    },
+  });
+
+  const actionBox = document.getElementById('sheet-actions');
+  actionBox.textContent = '';
+  for (const action of actions) {
+    actionBox.append(el('button', {
+      class: action.primary ? 'primary' : '', onclick: action.onClick,
+    }, action.label));
+  }
 }
 
 /** A classified LaTeX failure, shown where the user is looking.
@@ -2077,6 +2279,7 @@ async function boot() {
   // Bound through a wrapper: `onclick` would pass the MouseEvent as the level.
   document.getElementById('btn-recompile').onclick = guard(() => recompileSheet());
   document.getElementById('btn-render').onclick = guard(renderSheet);
+  document.getElementById('btn-paper').onclick = guard(paperSheet);
   document.getElementById('btn-check').onclick = guard(checkSheet);
   document.getElementById('btn-archive').onclick = guard(archiveSheet);
   document.getElementById('btn-history').onclick = guard(historySheet);

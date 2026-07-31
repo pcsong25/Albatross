@@ -1490,3 +1490,100 @@ spending. Every budget in this system now prices the work first.
 `plan` over-counts when a role's backend is unusable — a failing call is free, so the
 plan can refuse a run that would have squeezed through. `bp agents` already reports
 unusable backends, and refusing with visible arithmetic beats spending silently.
+
+---
+
+## D062 — A decomposition may have 1 to 10 children, not 3 to 7
+
+**Date** 2026-07-31 · **Milestone** L3 (tuning)
+
+`LIGHT.md` §367 says 3–7 children, and the pydantic validator enforced it. Both ends
+were wrong for real nodes.
+
+**One child.** A node whose entire content is a *reduction* — the theorem follows
+from one substantial lemma plus a limiting argument, a compactness step, a change of
+variables — has one child and a reduction proof that is itself the work. The bound
+forced the model to either invent two siblings it did not believe in, or return
+`already-atomic` for a node that is nothing of the kind. Both are worse than one
+child: the first puts nodes in the graph that the user then deletes, the second loses
+the reduction.
+
+**Ten children.** A long argument with several independent estimates is an ordinary
+shape for a real theorem, and seven is an arbitrary place to stop.
+
+**Decision.** `MIN_CHILDREN = 1`, `MAX_CHILDREN = 10`, in
+`bp/roles/decompose.py`. The bound now only excludes the two degenerate answers —
+nothing, and a paper cut into paragraphs — and the *judgement* moved into the prompt,
+which says what each end of the range is for and what makes each end wrong: a single
+child that is the parent restated is a restatement, and a "child" that is the middle
+third of a computation is not a lemma, because each child is verified alone by a
+reader who sees nothing else.
+
+**Alternatives.** (a) Keep 3–7 and let the user pass `--force`. Rejected: `--force`
+means *the user overrules the verdict*, not *the shape is unusual*. (b) No bound at
+all, relying on the prompt. Rejected: the validator is the thing that stops an empty
+`decompose` verdict being written, which is a failure that has actually happened.
+
+**To reverse.** Two constants. Nothing else reads them; the prompt text would want
+rewriting to match.
+
+---
+
+## D063 — The readable paper is a second artifact, agent-written, built only on request
+
+**Date** 2026-07-31 · **Milestone** L3 (tuning)
+
+The user's complaint about `bp render --clean`, in their words: content runs outside
+the page, the mathematics is arranged by following the DAG — `(H1)`, `(H2)` — "which
+is usually not how humans write a paper", and references use node identifiers rather
+than naming the result. All three are accurate, and none is a bug in the renderer:
+they are what a faithful rendering of a dependency graph looks like.
+
+The obvious fix would be to make `render.py` cleverer. That is the one thing this
+system may not do — the guarantee is that the document is regenerated from the node
+files and holds no state, and prose judgement cannot be regenerated.
+
+**Decision.** A second document, and a seventh role. `bp paper` / **Paper…** asks a
+`writer` agent to reorganise the same mathematics: hypothesis lists into sentences,
+routine lemmas into the proofs that use them, sections grouped by idea, results named
+rather than cited by id. It is **optional, separate, and never automatic.**
+`bp render` is untouched and remains the authority.
+
+**Where the guarantee went.** Nothing can check that an exposition is faithful. What
+code can check is that nothing was *dropped*, and that is enumerated end to end:
+
+- The outline assigns every active node to exactly one section; `PAP001`/`PAP002`
+  refuse an assignment that drops one or duplicates one, with a repair round.
+- Each section declares `stated` (with a checkable `\label{paper:<id>}`) and `merged`
+  (with a note saying where the node went); `PAP003`/`PAP004` refuse a section that is
+  silent about a node it was given.
+- Every `\ref{paper:…}` is checked against the graph (`PAP005`), because a reference
+  nobody enumerates is a reference nobody checks — the lesson of D055.
+- A section whose call failed is recorded as failed and **prints as such in the
+  document** (`PAP006`). An exposition missing three sections must not read as a
+  shorter paper.
+
+**And the apparatus is not the model's to write.** Every built paper carries, from
+code: a provenance paragraph under the title; the target's status; every admitted or
+assumed node with its reason; how many statements have no verified proof; and an
+appendix mapping each node of the development to the section that covers it, followed
+by every departure and every loss the writer itself declared. `--bare` omits it for a
+journal submission. So the accuracy the translation loses is *recoverable* rather than
+invisible, which was the user's own stated worry.
+
+**Staleness rather than regeneration.** The draft stores each node's statement *and*
+proof hash. `bp paper --status` and the sheet lead with what has moved since. Nothing
+rebuilds automatically: a paper the user did not ask for, describing a graph they have
+since edited, is worse than no paper.
+
+**Alternatives.** (a) One call for the whole paper. Rejected: output token limits make
+it fail on any real development, and there would be no per-section completeness check
+— the coverage guarantee is what makes this safe to ship. (b) Let the writer edit node
+files so the development itself reads better. Rejected outright: that is an agent
+maintaining the document, which is non-negotiable #2. (c) Rebuild the paper on every
+render. Rejected: it costs a model call per render and would silently re-bill.
+
+**To reverse.** Delete `bp/paper.py`, `bp/roles/paper.py`, the two prompts,
+`templates/paper.tex.j2`, the `writer` role and the endpoints. `preamble.tex.j2`
+would fold back into `document.tex.j2`. Nothing in the deterministic core depends on
+any of it.

@@ -462,7 +462,13 @@ def _why_flat(children, known: set[str], depth: int) -> str:
     return "\n".join(out)
 
 
-def _environment() -> Environment:
+def template_env() -> Environment:
+    """The Jinja environment for every template this system renders.
+
+    Public because :mod:`bp.paper` renders the exposition through the same
+    delimiters and the same template directory. The delimiters are unusual on
+    purpose: LaTeX is made of braces, so ``{{`` and ``{%`` cannot be used.
+    """
     return Environment(
         loader=FileSystemLoader(str(TEMPLATE_DIR)),
         block_start_string="((*",
@@ -502,7 +508,7 @@ def default_preamble(clean: bool = False) -> str:
     Rendered from the real template with an empty project preamble, so it is exactly
     what a document gets and cannot drift from it.
     """
-    template = _environment().get_template("document.tex.j2")
+    template = template_env().get_template("document.tex.j2")
     text = template.render(
         title="", preamble="", date="", clean=clean,
         certificate={"headline": "", "support_items": [], "why": "", "counts": ""},
@@ -578,7 +584,7 @@ def document(
         else:
             title = "Proof development"
 
-    template = _environment().get_template("document.tex.j2")
+    template = template_env().get_template("document.tex.j2")
     return template.render(
         title=title,
         preamble=preamble.strip(),

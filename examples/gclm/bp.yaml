@@ -141,6 +141,18 @@ agents:
                   -c, model_reasoning_effort=xhigh]
       timeout: 2400
 
+    # The optional readable paper (`bp paper`). One call that reads the whole
+    # development and plans the sections, then one per section. Nothing waits on it,
+    # so a slow subscription CLI costs nothing but patience.
+    writer:
+      backend: codex_cli
+      model: gpt-5.6-sol
+      options:
+        command: [codex, exec, --skip-git-repo-check,
+                  --model, gpt-5.6-sol,
+                  -c, model_reasoning_effort=xhigh]
+      timeout: 2400
+
 budget:
   # A run stops before the call that would cross either cap. The dollar cap only
   # constrains calls whose price is known; a subscription CLI reports no price,

@@ -408,6 +408,153 @@ def register(app: typer.Typer) -> None:
         console.print(Text(result.describe()))
         _print_spend(registry)
 
+    @app.command("paper")
+    def paper_cmd(
+        root: Optional[Path] = typer.Option(None, "--root"),
+        replay: bool = typer.Option(False, "--replay"),
+        title: Optional[str] = typer.Option(None, "--title", help="override the writer's title"),
+        guidance: Optional[str] = typer.Option(
+            None, "--guidance", "-g", help="how you want the paper shaped"
+        ),
+        plan: bool = typer.Option(
+            False, "--plan", help="what it would cost, without making a call"
+        ),
+        status: bool = typer.Option(
+            False, "--status", help="describe the paper already built, if any"
+        ),
+        rebuild: bool = typer.Option(
+            False,
+            "--rebuild",
+            help="re-render the stored draft to LaTeX without calling any model",
+        ),
+        bare: bool = typer.Option(
+            False,
+            "--bare",
+            help="omit the provenance note and the appendix — for a file going to a "
+            "journal rather than to you",
+        ),
+        out: Optional[Path] = typer.Option(None, "-o", "--out"),
+        to_stdout: bool = typer.Option(False, "--stdout"),
+        pdf: bool = typer.Option(False, "--pdf", help="compile it too"),
+    ) -> None:
+        """Write the development up as a readable paper. Optional, and never automatic.
+
+        `bp render` is the document this system guarantees: generated from the node
+        files every time, with every gap marked. This is the other one — an agent
+        reorganises the same mathematics into something a person would want to read,
+        merging routine lemmas into the proofs that use them and turning `(H1)`,
+        `(H2)` into sentences. It is a build artifact under `.bp/paper/`, it is never
+        rebuilt behind your back, and it goes out of date the moment you edit a node:
+        `--status` says whether it has.
+
+        The exposition may lose detail. Every built paper therefore carries a
+        provenance note and an appendix saying which section covers each node, both
+        written by code rather than by the agent.
+        """
+        from . import compile as compile_mod
+        from . import paper as paper_mod
+        from .checks import load_graph
+        from .roles import paper as paper_role
+
+        project = _project(root)
+
+        if plan:
+            registry = _registry(root, replay)
+            console.print(Text(paper_role.estimate(project, registry=registry).describe()))
+            return
+
+        graph, load_diagnostics, swept = load_graph(project)
+        if not swept:
+            err_console.print("[bold red]error[/] the graph has a cycle; run `bp check`")
+            raise typer.Exit(code=1)
+        # Same refusal as `cli._graph`: a document assembled from a graph that only
+        # partly loaded describes a project the user does not have.
+        broken = [d for d in load_diagnostics if d.severity == "error"]
+        if broken:
+            err_console.print(
+                "[bold red]error[/] some node files could not be loaded, so the "
+                "development is incomplete. Run `bp check` and fix those first."
+            )
+            for d in broken:
+                err_console.print(Text(f"  {d.code}: {d.message}"))
+            raise typer.Exit(code=2)
+
+        draft = None
+        clean = True
+        if status or rebuild:
+            try:
+                draft = paper_mod.load(project)
+            except paper_mod.DraftUnreadable as exc:
+                err_console.print(f"[bold red]error[/] {exc}")
+                raise typer.Exit(code=1)
+            if draft is None:
+                err_console.print(
+                    "[bold red]error[/] no paper has been built for this project yet; "
+                    "run `bp paper` without --status/--rebuild"
+                )
+                raise typer.Exit(code=1)
+            if status:
+                console.print(Text(paper_mod.describe(draft, graph)))
+                problems = paper_mod.check(draft, graph)
+                for d in problems:
+                    console.print(
+                        Text(d.line(), style="red" if d.severity == "error" else "yellow")
+                    )
+                raise typer.Exit(
+                    code=1 if any(d.severity == "error" for d in problems) else 0
+                )
+        else:
+            registry = _registry(root, replay)
+            report = _run(
+                paper_role.write,
+                project,
+                registry=registry,
+                title=title,
+                guidance=guidance or "",
+            )
+            console.print(Text(paper_role.summarise(report)))
+            _print_spend(registry)
+            draft = report.draft
+            if draft is None:
+                raise typer.Exit(code=1)
+            clean = report.clean
+            console.print(f"[dim]draft written to {report.path}[/]")
+
+        if title:
+            draft = draft.model_copy(update={"title": title})
+        tex = paper_mod.document(
+            draft, graph, preamble=ops.read_preamble(project), apparatus=not bare
+        )
+        if to_stdout:
+            sys.stdout.write(tex)
+            raise typer.Exit(code=0 if clean else 1)
+        path = out or (project.build_dir / "paper.tex")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(tex, encoding="utf-8")
+        console.print(f"wrote {path}")
+        if not pdf:
+            raise typer.Exit(code=0 if clean else 1)
+
+        result = compile_mod.compile_pdf(
+            tex, path.parent, name=path.stem, preamble=ops.read_preamble(project)
+        )
+        for warning in result.warnings:
+            console.print(Text(f"warning: {warning}", style="yellow"))
+        if result.ok:
+            console.print(f"wrote {result.pdf}")
+            raise typer.Exit(code=0 if clean else 1)
+        problem = result.problem
+        err_console.print(
+            Text(f"the paper did not compile: {problem.kind}", style="bold red")
+        )
+        if problem.message:
+            err_console.print(Text(problem.message))
+        if problem.hint:
+            err_console.print(Text(problem.hint, style="dim"))
+        if problem.excerpt:
+            err_console.print(Text(problem.excerpt, style="dim"))
+        raise typer.Exit(code=1)
+
     @app.command("jobs")
     def jobs_cmd(root: Optional[Path] = typer.Option(None, "--root")) -> None:
         """Job records, most recent last."""

@@ -57,6 +57,18 @@ class Project:
     def build_dir(self) -> Path:
         return self.state_dir / "build"
 
+    @property
+    def paper_dir(self) -> Path:
+        """Where the agent-written exposition is kept.
+
+        Under ``.bp/`` rather than beside ``nodes/`` on purpose: it is a build
+        artifact, not part of the project. The development is the source of truth
+        and is regenerated from the node files every time; the paper is written
+        once, when asked, and goes out of date the moment a node changes — which
+        is why the draft is stored with the hashes it was written from.
+        """
+        return self.state_dir / "paper"
+
     def ensure_state(self) -> Path:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         return self.state_dir

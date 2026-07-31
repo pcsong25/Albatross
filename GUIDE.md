@@ -173,8 +173,10 @@ a note, and you are offered **Write the proof** or **Decompose anyway**. A lemma
 that is one integration by parts should be proved, not split into three
 sub-lemmas and a reduction.
 
-When it does decompose, it produces one level: 3–7 children,
-each a section or a major lemma. The hint box is prefilled with the node's
+When it does decompose, it produces one level: between one and ten children,
+usually three to seven, each a section or a major lemma. One child is what you get
+when the node's whole content is a reduction to a single lemma; ten when the
+argument really has that many independent estimates in it. The hint box is prefilled with the node's
 `strategy` — use it. Naming the shape of the argument you have in mind ("bootstrap
 on the $L^\infty$ norm"; "case split on whether $a < 1/2$") is ten seconds of
 typing and removes the largest single source of bad decompositions.
@@ -242,8 +244,13 @@ download, and a compiled PDF. Unproved nodes carry a visible marker; admitted
 ones are boxed and labelled as assumptions; the support certificate is at the
 top. Each checked node also carries one line saying what was verified and at what
 level, so reading the document tells you how much scrutiny each lemma got.
-`--audit` adds the discharge tables and the ledger. `--clean` strips all of it —
-that version is the paper.
+`--audit` adds the discharge tables and the ledger. `--clean` strips all of it.
+
+**10. When you want something readable, build the paper.** `--clean` removes the
+apparatus but not the shape: it is still one numbered node after another in
+dependency order, with `(H1)`, `(H2)` above each statement and every reference an
+identifier. **Paper…** (or `bp paper`) is the other document — see §9c. It is
+optional, you build it when you ask for it, and it never replaces the one above.
 
 ---
 
@@ -307,6 +314,10 @@ short tour.*
 | **Relabel** | Change the difficulty label | The prover declined a "routine" lemma |
 | **Archive** | Leaves the active graph. **Never deletes** | A branch you have abandoned |
 | **Why?** | The status chain in plain English. No model involved | Whenever a colour surprises you |
+
+Two buttons in the top bar produce documents: **Render LaTeX** (exact, generated from
+your files every time) and **Paper…** (readable, agent-written, built on request —
+§9c).
 
 The chevron on a node in the graph (`▾`/`▸`, at its left edge) folds the subtree
 **in the view only** — nothing is written and the fold is gone on reload.
@@ -754,6 +765,7 @@ agents:
     confirmer:  {backend: claude_cli, model: opus}
     auditor:    {backend: claude_cli, model: opus}
     prover:     {backend: claude_cli, model: sonnet}
+    writer:     {backend: claude_cli, model: opus}
 budget:
   per_run_usd: 3.0
   max_calls_per_run: 80
@@ -766,7 +778,9 @@ claims — and at `--level deep` it is most of the calls, so a mid model there i
 single biggest lever on cost. The four that need a whole argument in view
 (`verifier_a`, `verifier_b`, `confirmer`, `auditor`) want the strongest model you
 have; do not economise on `confirmer` in particular, because without confirmation
-the objection list is mostly pedantry and you will stop reading it.
+the objection list is mostly pedantry and you will stop reading it. `writer` runs
+only when you press **Paper…**, so it can afford your best setting — and since
+nothing waits on it, it is the role least harmed by a slow subscription CLI.
 
 Backends:
 
@@ -783,7 +797,7 @@ role already resolves to, keeping your comments and key order. Nothing about you
 changes — it is just written down, so there is no layer left to infer. Run it once after
 upgrading.
 
-Beyond the ten roles, one more knob:
+Beyond the eleven roles, one more knob:
 
 ```yaml
 agents:
@@ -891,6 +905,62 @@ which makes re-runs free and lets you work offline.
 
 ---
 
+## 9c. The paper
+
+Two documents come out of a project, and they are not interchangeable.
+
+**`bp render`** is the one this system stands behind. It is generated from your node
+files every time, it holds no state, and every gap in it is marked. It also reads
+like a graph: statements in dependency order, `(H1)`, `(H2)` above each one,
+`gclm.energy-lower-bound` where a paper would write "the energy estimate". `--clean`
+removes the markers, not the shape.
+
+**`bp paper`**, or the **Paper…** button, is the other one. An agent reads the whole
+development and rewrites it the way a paper is written:
+
+- hypothesis lists become sentences — *"Let $s > 3/2$ and let $u_0 \in H^s$ be
+  divergence-free"*;
+- routine lemmas move inside the proofs that use them, instead of being Lemma 7;
+- sections are grouped by idea rather than by dependency depth, and the theorem is
+  stated early and proved late, the way you would write it;
+- results are named — *"by the energy estimate (Lemma 3)"* — and never referred to by
+  node id.
+
+It works in two passes: one call plans the sections and assigns every node a home,
+then one call writes each section. `bp paper --plan` prices that before you spend it.
+
+**What it is not.** It is not maintained, and it is not exact. It is built when you
+ask and never touched again, so it goes out of date the moment you edit a node —
+`bp paper --status` and the sheet lead with what has moved. And an exposition can
+lose detail: a hypothesis restated in words, two lemmas combined, a justification
+compressed.
+
+**What stops that being dangerous.** Nothing can check that prose is faithful, so
+instead nothing is allowed to go missing quietly:
+
+- Every node of your development is assigned to exactly one section, and the
+  assignment is checked against the graph. A node the outline drops is a `PAP001`
+  error and, if the writer will not fix it, the paper's own appendix says the node is
+  **not included**.
+- Every section says which nodes it stated outright and which it folded into prose,
+  with a note saying where each went. A section silent about a node it was given is
+  rejected and rewritten.
+- The writer's own declared departures and losses are printed in the paper.
+- Under the title, written by code and not by the agent: what the development says
+  the target rests on, every admitted or assumed statement with its reason, and how
+  many statements have no verified proof. An exposition cannot make a conditional
+  theorem unconditional by sounding more confident.
+- An appendix maps every node to the section covering it. When a passage looks wrong,
+  that is how you find the node it came from — and the node is the authority.
+
+`--bare` drops the provenance note and the appendix, for a file going to a journal
+rather than to you. Everything else is unchanged.
+
+Downloading, re-rendering and compiling a paper you have already built cost nothing
+and make no model call: `bp paper --rebuild`, or the buttons in the sheet.
+
+---
+
 ## 10. Every command
 
 Deterministic — no key, no network, no configuration:
@@ -926,6 +996,7 @@ Agents — these call models and cost time or money:
 | `bp verify <id> [--level L] [--batch N] [--no-record]` | the three jobs the level calls for, then confirmation |
 | `bp audit <id>` | the four statement questions. Never changes a status, but does record that it ran — `TGT001` |
 | `bp prove <id> [--force]` | write a proof for an easy leaf |
+| `bp paper [--plan] [--status] [--rebuild] [--bare] [--guidance "…"] [--pdf]` | the readable write-up (§9c). `--plan` and `--status` and `--rebuild` make no model call |
 | `bp recompile [--level L] [--dry-run] [--budget N] [--batch N]` | verify everything stale or unverified |
 | `bp resume [job_id]` | continue an interrupted recompile |
 | `bp ui [--port N] [--vendor] [--replay]` | the web interface |

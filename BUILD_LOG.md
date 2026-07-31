@@ -959,3 +959,60 @@ bp verify thm.main --level deep   (cap 2)          refused, 0 calls spent
 The user's own re-run is now three calls rather than thirty-nine: the 21 claim answers
 they had already paid for survived, because the jobs that completed had saved their
 caches. That was luck — the cap fired between jobs. The `finally` makes it a guarantee.
+
+### 1–10 children, and a second document
+
+Two requests from the first real tuning session, one small and one not.
+
+**The decomposer's bound was wrong at both ends.** 3–7 came from the brief. A node
+whose whole content is a *reduction* — the theorem follows from one substantial lemma
+plus a limiting argument — has one child, and the bound forced the model either to
+invent two siblings it did not believe in or to return `already-atomic` for a node
+that was nothing of the kind. Ten at the other end, because an argument with several
+independent estimates is an ordinary shape. The validator now only excludes the two
+degenerate answers, and the judgement moved into the prompt, which says what each end
+of the range is *for* and what makes each end wrong.
+
+**The clean document reads like a graph, because it is one.** The user's complaint was
+precise: content runs off the page, the mathematics is arranged by following the DAG
+with `(H1)`, `(H2)` above every statement, and references name nodes rather than
+results. All three are true, and none is a bug — that is what a faithful rendering of a
+dependency graph looks like. The tempting fix, making `render.py` cleverer, is the one
+thing forbidden: its guarantee is that it holds no state and is regenerated from the
+node files, and prose judgement cannot be regenerated.
+
+So there is a second artifact and a seventh role. `bp paper` / **Paper…** asks a
+`writer` to reorganise the same mathematics — hypothesis lists into sentences, routine
+lemmas into the proofs that use them, sections by idea, results named — in two passes:
+one call plans the sections, then one call writes each. `bp render` is untouched.
+
+The interesting part was where to put the guarantee, since nothing can check that
+prose is faithful. Answer: check that nothing *vanished*, and make the losses print.
+The outline must place every active node (`PAP001`); each section must declare every
+node it was given as stated — with a checkable `\label{paper:<id>}` — or merged, with
+a note saying where it went (`PAP003`, `PAP004`); a `\ref` to a node that does not
+exist is reported (`PAP005`); and a section whose call failed prints "This section was
+not written" rather than being quietly omitted (`PAP006`). Then the assembled document
+carries, from code and not from the agent, the target's status, every admitted node
+with its reason, and an appendix mapping each node to its section, followed by every
+departure and loss the writer itself declared. `--bare` drops that for a journal
+submission.
+
+Staleness rather than regeneration: the draft stores each node's statement *and* proof
+hash, and `bp paper --status` leads with what has moved. Nothing rebuilds
+automatically, and rendering, downloading and compiling a built draft make no model
+call at all.
+
+Two things went wrong on the way. `\noindent(((counts)))` in the new template expands
+to `\noindentDevelopment status: …` — a fatal undefined control sequence that the line
+above it escaped only because *its* variable happened to start with `\textit`. And the
+first version of the paper template copied the fifty-line preamble, which would have
+made the Preamble sheet describe a document the user was not compiling; it is now one
+included file.
+
+```
+pytest                                             651 passed
+bp paper --plan --root examples/gclm               10 nodes, 5 calls (unpriced)
+bp paper --pdf   (scripted writer, 2 nodes)        wrote .bp/build/paper.pdf
+bp paper --status   (after one edit)               written before 1 node(s) edited
+```

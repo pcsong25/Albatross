@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from .. import checks, compile as compile_mod, events as events_mod, frontier, ops
 from .. import ledger as ledger_mod
+from .. import paper as paper_mod
 from .. import recompile as recompile_mod
 from .. import render as render_mod
 from .. import verification as verification_mod
@@ -40,6 +41,7 @@ from ..roles import audit as audit_role
 from ..roles import check as check_role
 from ..roles import decompose as decompose_role
 from ..roles import extract as extract_role
+from ..roles import paper as paper_role
 from ..roles import prove as prove_role
 from ..roles import tidy as tidy_role
 from ..roles import verify as verify_role
@@ -59,7 +61,8 @@ STATIC = Path(__file__).parent / "static"
 #: 2  claims / ledger_diagnostics / verification (Addendum A)
 #: 3  labels / refs / reference_obligations / audited_against (citations)
 #: 4  /api/verify/plan — the bill for a node, and confirm_stopped on a verify
-API_VERSION = 4
+#: 5  /api/paper — the optional agent-written exposition, built on request
+API_VERSION = 5
 
 #: pdflatex writes into a shared build directory, so two compiles at once
 #: interleave and a `FileResponse` can stream a file being rewritten. Module-level
@@ -125,6 +128,13 @@ class RecompileBody(BaseModel):
     nodes: list[str] = Field(default_factory=list)
     level: str | None = None
     batch: int = 1
+
+
+class PaperBody(BaseModel):
+    """What the *Write the paper* button sends. Both fields are the user's."""
+
+    title: str | None = None
+    guidance: str = ""
 
 
 # --- serialisation ------------------------------------------------------------
@@ -566,6 +576,208 @@ def create_app(project: Project, replay: bool = False) -> FastAPI:
                 if d.severity == "error"
             ],
         }
+
+    # --- the paper -----------------------------------------------------------
+    #
+    # A second, optional artifact: the same mathematics written up the way a person
+    # would read it. Everything here is about a *stored draft*. Rendering it,
+    # compiling it and downloading it make no model call, so only the one POST
+    # spends anything — and the paper is never rebuilt as a side effect of anything
+    # else, because it is a document the user asked for at a moment they chose.
+
+    def _draft_or_404() -> paper_mod.Draft:
+        try:
+            draft = paper_mod.load(project)
+        except paper_mod.DraftUnreadable as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if draft is None:
+            raise HTTPException(
+                status_code=404,
+                detail="no paper has been written for this project yet",
+            )
+        return draft
+
+    @app.get("/api/paper")
+    def api_paper() -> dict[str, Any]:
+        """The state of the exposition: built or not, current or not, and what it lost.
+
+        Answers with ``exists: false`` rather than 404 so the sheet can open on a
+        project that has never built one — that is the normal case, not an error.
+        """
+        graph = load()
+        try:
+            draft = paper_mod.load(project)
+        except paper_mod.DraftUnreadable as exc:
+            return {"exists": False, "error": str(exc)}
+        if draft is None:
+            return {"exists": False, "error": ""}
+        delta = paper_mod.changes(draft, graph)
+        return {
+            "exists": True,
+            "error": "",
+            "title": draft.title,
+            "abstract": draft.abstract,
+            "built_at": draft.built_at,
+            "calls": draft.calls,
+            "cost_usd": draft.cost_usd,
+            "notes": draft.notes,
+            "unplaced": list(draft.unplaced),
+            "stale": delta.stale,
+            "staleness": {
+                "sentence": delta.sentence(),
+                "changed": delta.changed,
+                "added": delta.added,
+                "removed": delta.removed,
+            },
+            "sections": [
+                {
+                    "heading": s.heading,
+                    "purpose": s.purpose,
+                    "nodes": list(s.nodes),
+                    "stated": list(s.stated),
+                    "merged": [m.model_dump() for m in s.merged],
+                    "departures": list(s.departures),
+                    "lost": list(s.lost),
+                    "failed": s.failed,
+                    "words": len(s.tex.split()),
+                }
+                for s in draft.sections
+            ],
+            # Re-derived against the graph as it is now, not as it was: a paper that
+            # was clean when written can be wrong about a node that has since moved.
+            "diagnostics": [d.model_dump() for d in paper_mod.check(draft, graph)],
+        }
+
+    @app.get("/api/paper/plan")
+    def api_paper_plan() -> dict[str, Any]:
+        """What writing the paper would cost. Deterministic; makes no call."""
+        try:
+            registry = Registry(project, replay=app.state.replay)
+        except ConfigError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        est = paper_role.estimate(project, registry=registry)
+        return {
+            "nodes": est.nodes,
+            "sections": est.sections,
+            "calls": est.calls,
+            "estimated_usd": est.estimated_usd,
+            "unpriced_calls": est.unpriced_calls,
+            "text": est.describe(),
+        }
+
+    @app.post("/api/jobs/paper")
+    def api_paper_write(body: PaperBody | None = None) -> dict[str, Any]:
+        """Write the paper. The only endpoint here that spends anything."""
+        title = (body.title if body else None) or None
+        guidance = (body.guidance if body else "") or ""
+
+        def work(job: jobs_mod.Job) -> dict[str, Any]:
+            def observe(index: int, total: int, heading: str) -> None:
+                job.step = f"writing section {index + 1} of {total} — {heading}"
+
+            report = paper_role.write(
+                project,
+                registry=registry_for(job),
+                title=title,
+                guidance=guidance,
+                observer=observe,
+            )
+            draft = report.draft
+            return {
+                "clean": report.clean,
+                "stopped": report.stopped,
+                "failed": report.failed,
+                "sections": len(draft.sections) if draft else 0,
+                "title": draft.title if draft else "",
+                "lost": [
+                    {"section": s.heading, "text": t}
+                    for s in (draft.sections if draft else [])
+                    for t in s.lost
+                ],
+                "unplaced": list(draft.unplaced) if draft else [],
+                "diagnostics": [d.model_dump() for d in report.diagnostics],
+            }
+
+        return runner.submit("paper", None, work).as_dict()
+
+    def _render_paper(bare: bool) -> str:
+        draft = _draft_or_404()
+        try:
+            return paper_mod.document(
+                draft,
+                load(),
+                preamble=ops.read_preamble(project),
+                apparatus=not bare,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a fact about the draft, not a bug
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "kind": "render_failed",
+                    "message": f"The paper could not be assembled: {type(exc).__name__}: {exc}",
+                    "hint": "the stored draft is at .bp/paper/paper.json. Writing the "
+                    "paper again replaces it; nothing in the development is affected.",
+                    "excerpt": "",
+                    "warnings": [],
+                },
+            ) from exc
+
+    @app.get("/api/paper.tex")
+    def api_paper_tex(bare: bool = False) -> FileResponse:
+        tex = _render_paper(bare)
+        name = "paper-bare" if bare else "paper"
+        path = project.build_dir / f"{name}.tex"
+        with _build_lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(tex, encoding="utf-8")
+        return FileResponse(path, media_type="application/x-tex", filename=path.name)
+
+    @app.get("/api/paper.source", response_class=PlainTextResponse)
+    def api_paper_source(bare: bool = False) -> str:
+        return _render_paper(bare)
+
+    def _build_paper(bare: bool):
+        name = "paper-bare" if bare else "paper"
+        tex = _render_paper(bare)
+        with _build_lock:
+            return compile_mod.compile_pdf(
+                tex, project.build_dir, name=name, preamble=ops.read_preamble(project)
+            )
+
+    @app.get("/api/paper/compile")
+    def api_paper_compile(bare: bool = False) -> dict[str, Any]:
+        result = _build_paper(bare)
+        return {
+            "ok": result.ok,
+            "problem": result.problem.as_dict() if result.problem else None,
+            "warnings": result.warnings,
+            "undefined_refs": result.undefined_refs,
+            "duplicate_labels": result.duplicate_labels,
+        }
+
+    @app.get("/api/paper.pdf")
+    def api_paper_pdf(bare: bool = False, built: bool = False) -> FileResponse:
+        name = "paper-bare" if bare else "paper"
+        ready = project.build_dir / f"{name}.pdf"
+        if built and ready.exists():
+            return FileResponse(
+                ready,
+                media_type="application/pdf",
+                filename=ready.name,
+                content_disposition_type="inline",
+            )
+        result = _build_paper(bare)
+        if not result.ok:
+            raise _compile_error(result)
+        assert result.pdf is not None
+        return FileResponse(
+            result.pdf,
+            media_type="application/pdf",
+            filename=result.pdf.name,
+            content_disposition_type="inline",
+        )
 
     # --- mutations -----------------------------------------------------------
 

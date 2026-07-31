@@ -12,7 +12,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from bp import frontier, ops
+from bp import frontier, ops, paper as paper_mod
 from bp.checks import load_graph
 from bp.ui.app import create_app
 from bp.ui.jobs import JobRunner
@@ -904,6 +904,122 @@ class TestLabelsEndpoint:
         detail = client.get("/api/node/a").json()
         assert [x["name"] for x in detail["labels"]] == ["eq:a"]
         assert [x["name"] for x in detail["refs"]] == ["eq:a"]
+
+
+class TestPaper:
+    """The optional exposition, through HTTP.
+
+    The property being checked is the same one as everywhere else here: the
+    endpoints hold no logic. Whether the paper is stale, what it lost and where each
+    node went are all answers `bp.paper` already gives.
+    """
+
+    def _patch(self, monkeypatch, project, **responses):
+        import bp.ui.app as app_mod
+
+        def fake(project_arg, replay=False, observer=None):
+            registry = scripted_registry(project, **responses)
+            registry.observer = observer
+            return registry
+
+        monkeypatch.setattr(app_mod, "Registry", fake)
+
+    def _script(self):
+        outline = {
+            "title": "The theorem",
+            "abstract": "An abstract.",
+            "sections": [
+                {"heading": "Setting", "purpose": "notation", "nodes": ["a", "b"]},
+                {"heading": "The proof", "purpose": "conclude", "nodes": ["t"]},
+            ],
+            "notes": "",
+        }
+
+        def sec(ids, extra=""):
+            tex = "".join(
+                f"\\begin{{lemma}}\\label{{paper:{i}}}\nA statement.\n\\end{{lemma}}\n"
+                for i in ids
+            )
+            return {
+                "tex": tex + extra, "stated": list(ids), "merged": [],
+                "departures": [], "lost": [],
+            }
+
+        return [
+            json_reply(outline),
+            json_reply(sec(["a", "b"])),
+            json_reply(sec(["t"], "See Lemma~\\ref{paper:a}.")),
+        ]
+
+    def test_a_project_with_no_paper_says_so_rather_than_erroring(self, client, project):
+        small(project)
+        data = client.get("/api/paper").json()
+        assert data == {"exists": False, "error": ""}
+        # And the artifacts refuse with something readable rather than a 500.
+        assert client.get("/api/paper.source").status_code == 404
+        assert client.get("/api/paper.pdf").status_code == 404
+
+    def test_the_plan_makes_no_call_and_prices_the_run(self, client, project, monkeypatch):
+        small(project)
+        self._patch(monkeypatch, project)  # no scripted replies: a call would fail
+        plan = client.get("/api/paper/plan").json()
+        assert plan["nodes"] == 3
+        assert plan["calls"] == 1 + plan["sections"]
+        assert "floor" in plan["text"]
+
+    def test_writing_it_is_a_job_and_touches_no_node(self, client, project, monkeypatch):
+        small(project)
+        before = {p.name: p.read_text() for p in project.nodes_dir.glob("*.md")}
+        self._patch(monkeypatch, project, writer=self._script())
+        started = client.post("/api/jobs/paper", json={"guidance": "notes, not a paper"}).json()
+        job = _wait(client, started["id"])
+        assert job["status"] == "done", job.get("error")
+        assert job["result"]["sections"] == 2
+        assert job["result"]["clean"]
+        assert {p.name: p.read_text() for p in project.nodes_dir.glob("*.md")} == before
+
+        paper = client.get("/api/paper").json()
+        assert paper["exists"] and not paper["stale"]
+        assert [s["heading"] for s in paper["sections"]] == ["Setting", "The proof"]
+        assert paper["diagnostics"] == []
+
+    def test_the_source_is_rendered_from_the_stored_draft_for_free(
+        self, client, project, monkeypatch
+    ):
+        small(project)
+        self._patch(monkeypatch, project, writer=self._script())
+        job = _wait(client, client.post("/api/jobs/paper", json={}).json()["id"])
+        assert job["status"] == "done"
+        # No responses left in the script, so a second model call would fail — these
+        # must be pure renders of what is on disk.
+        tex = client.get("/api/paper.source").text
+        assert "\\begin{document}" in tex and "Provenance" in tex
+        bare = client.get("/api/paper.source?bare=true").text
+        assert "Provenance" not in bare
+        assert client.get("/api/paper.tex").status_code == 200
+
+    def test_editing_a_node_makes_the_paper_report_itself_stale(
+        self, client, project, monkeypatch
+    ):
+        small(project)
+        self._patch(monkeypatch, project, writer=self._script())
+        _wait(client, client.post("/api/jobs/paper", json={}).json()["id"])
+        client.post("/api/node/a/statement", json={"text": "Lemma A, restated."})
+        paper = client.get("/api/paper").json()
+        assert paper["stale"]
+        assert paper["staleness"]["changed"] == ["a"]
+        # It still renders: an out-of-date paper is readable, just out of date.
+        assert client.get("/api/paper.source").status_code == 200
+
+    def test_an_unreadable_draft_is_reported_not_raised(self, client, project, monkeypatch):
+        small(project)
+        self._patch(monkeypatch, project, writer=self._script())
+        _wait(client, client.post("/api/jobs/paper", json={}).json()["id"])
+        path = paper_mod.draft_path(project)
+        path.write_text("{not json", encoding="utf-8")
+        data = client.get("/api/paper").json()
+        assert data["exists"] is False and data["error"]
+        assert client.get("/api/paper.source").status_code == 422
 
 
 class TestVersionSkew:

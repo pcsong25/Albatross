@@ -65,6 +65,7 @@ ROLES = (
     "auditor",
     "proofreader",
     "prover",
+    "writer",
 )
 
 #: Published list prices, US dollars per million tokens. Overridable in
@@ -93,6 +94,10 @@ DEFAULT_ROLES: dict[str, dict[str, Any]] = {
     "auditor": {"backend": "claude_api", "model": "claude-opus-5"},
     "proofreader": {"backend": "claude_api", "model": "claude-sonnet-5"},
     "prover": {"backend": "claude_api", "model": "claude-sonnet-5"},
+    # The exposition. A whole-development call and then a page of mathematical
+    # prose per section: the strongest model available, and the one role a user
+    # might reasonably point at a subscription CLI because it is run rarely.
+    "writer": {"backend": "claude_api", "model": "claude-opus-5"},
 }
 
 
@@ -121,6 +126,9 @@ ROLE_INHERITS: dict[str, tuple[str, ...]] = {
     # It used to *be* `checker`, hardcoded in `roles/tidy.py`. Inheriting from it keeps
     # every existing project's behaviour identical while making it adjustable.
     "proofreader": ("checker", "decomposer", "verifier_a"),
+    # Writing mathematical prose from a development is the decomposer's job in a
+    # different direction, so it is the closest configured role.
+    "writer": ("decomposer", "verifier_a", "checker"),
 }
 
 
@@ -220,6 +228,7 @@ ROLE_NOTES: dict[str, str] = {
     "auditor": "Four questions about a statement, no proof in view. --level deep only.",
     "proofreader": "Syntax-only corrections when you save a statement. Small and frequent.",
     "prover": "Writes proofs for routine and standard leaves. Never sets a status.",
+    "writer": "The optional readable paper: one call for the outline, then one per section. Run rarely, so it can afford the best model you have.",
 }
 
 

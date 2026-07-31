@@ -1,0 +1,85 @@
+((= Jinja delimiters are (((...))) and ((*...*)) so that LaTeX braces pass through =))
+((= The exposition. Same preamble as the node-by-node development — one file, so
+    `render.preamble_facts` cannot go out of date — and `clean` is always true here,
+    so the status macros are no-ops: nothing in a paper is tagged in the margin.
+
+    What the WRITER supplies: the title, the abstract, each section heading, and each
+    section's body. What this template and `bp/paper.py` supply, and no agent can
+    touch: the provenance note under the title and the appendix saying where every
+    node of the development went. Those are the reason an exposition that has lost
+    something is recoverable rather than a plausible fiction. =))
+((* include "preamble.tex.j2" *))
+
+\title{(((title)))}
+\date{(((date)))}
+
+\begin{document}
+\maketitle
+
+((* if abstract *))
+\begin{abstract}
+(((abstract)))
+\end{abstract}
+((* endif *))
+
+((* if provenance_note *))
+\begingroup\small
+\noindent{}(((provenance_note)))
+((* if standing_items *))
+\begin{itemize}\itemsep1pt\parskip0pt
+((* for item in standing_items *))
+  \item (((item)))
+((* endfor *))
+\end{itemize}
+((* endif *))
+((* if counts *))
+\noindent{}(((counts)))
+((* endif *))
+\endgroup
+\medskip
+((* endif *))
+
+((* for section in sections *))
+((= The label goes AFTER the argument, not inside it: a `\label` inside a
+    sectioning argument ends up in the table of contents and the running head, and
+    with hyperref it can resolve to the wrong number. =))
+\section{(((section.heading)))}\label{(((section.label)))}
+((* if section.failed *))
+\bpaudit{}
+\noindent\textbf{This section was not written.} (((section.failed)))
+((* if section.nodes_line *))
+\par\noindent{}(((section.nodes_line)))
+((* endif *))
+((* else *))
+(((section.tex)))
+((* endif *))
+
+((* endfor *))
+((* if provenance_rows *))
+\appendix
+\section{Where the development went}
+\label{sec:bp-provenance}
+
+\noindent{}(((provenance_intro)))
+
+\begingroup\small
+\begin{itemize}\itemsep1pt\parskip0pt
+((* for row in provenance_rows *))
+  \item (((row)))
+((* endfor *))
+\end{itemize}
+((* if departure_rows *))
+
+\medskip
+\noindent{}Where the writer says this exposition departs from the development, or
+could not carry something over:
+
+\begin{itemize}\itemsep1pt\parskip0pt
+((* for row in departure_rows *))
+  \item (((row)))
+((* endfor *))
+\end{itemize}
+((* endif *))
+\endgroup
+((* endif *))
+\end{document}

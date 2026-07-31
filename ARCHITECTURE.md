@@ -1035,7 +1035,9 @@ silently dropped.
   *"Sketch — this is not a proof"*, not in a `proof` environment: a QED box on
   an argument nobody has made would be a lie in the one place the document must
   not tell one.
-- `--clean` omits every marker and the whole status section. That is the paper.
+- `--clean` omits every marker and the whole status section. That is the
+  development, unadorned — see §9b for the version written the way a paper is
+  written.
 - `--audit` adds each node's discharge table beneath it, for reading the
   bookkeeping alongside the mathematics.
 - `--title`, `-o`, `--stdout` do what they say. The default output is
@@ -1073,6 +1075,75 @@ notation, so three separate things need to know what that notation means:
 
 The parse in (3) decides only how notation is *drawn*. Nothing about the graph
 depends on it, which is the line `bp/ui` is not allowed to cross.
+
+---
+
+## 9b. The paper — the optional second document
+
+`bp render` is exact and reads like what it is: statements in dependency order,
+each hypothesis a numbered item, each cross-reference a node id. Nobody writes a
+paper that way, and `--clean` strips the apparatus without changing the shape.
+
+So there is a second artifact — `bp paper`, or **Paper…** in the browser — where
+an agent reorganises the same mathematics into something a person would want to
+read: hypothesis lists become sentences, routine lemmas move inside the proofs
+that use them, results are named rather than cited by identifier, and sections are
+grouped by idea rather than by dependency depth. It is **optional, built only on
+request, and never regenerated automatically.** `bp/render.py` keeps its
+guarantee; nothing below weakens it.
+
+The split is the usual one. `bp/roles/paper.py` is the judgement:
+`bp/paper.py` is everything that can be checked.
+
+**Two phases, both enumerated.**
+
+1. *The outline.* One call reads the whole development — statements in full, proofs
+   truncated to `OUTLINE_PROOF_CHARS` — and returns a title, an abstract and a list
+   of sections, each with the node ids whose content it carries. `check_outline`
+   compares that assignment against `graph.active`: a node left out is `PAP001`, a
+   node in two sections is `PAP002`, and one repair round is spent on it. "In a
+   section" does not mean "gets its own numbered statement" — it means one section
+   is responsible for the content.
+2. *Each section.* One call per section, given the full text of its own nodes, the
+   whole outline, and every label the paper will contain. It returns the section
+   body plus four lists: `stated` (nodes given a numbered statement, each carrying
+   `\label{paper:<id>}`), `merged` (nodes folded into prose, each with a note
+   saying where it went), `departures`, and `lost`. `check_section` refuses a
+   section that is silent about an assigned node (`PAP003`), a `stated` claim with
+   no matching label (`PAP004`), and warns on a `\ref{paper:…}` to a node that does
+   not exist (`PAP005`); `TEX001`/`TEX002` run over the body as well. One repair
+   round each.
+
+**What code writes, and no agent can touch or remove.** Under the title, a
+provenance paragraph saying the mathematics is the development's and the exposition
+is not; then the target's status — proved, holding relative to *n* named items, or
+not proved with the `bp why` sentence — every admitted or assumed node with its
+reason, and how many statements have no verified proof. Then, as an appendix, one
+line per node of the development saying which section covers it and whether it was
+stated or merged, followed by every `departure` and every `lost` entry the writer
+declared. `--bare` (or the checkbox) omits both, for a file going to a journal
+rather than to the author.
+
+That apparatus is the answer to the obvious objection. The exposition *can* lose
+detail. What it cannot do is lose it invisibly: every node is accounted for, every
+declared loss is printed, and the development remains the authority.
+
+**Staleness is a first-class answer, not a warning.** The stored draft
+(`.bp/paper/paper.json`) carries a fingerprint of every active node's statement
+*and* proof hash. `paper.changes` says what has been edited, added or archived
+since, `bp paper --status` and the sheet lead with it, and nothing rebuilds
+automatically — a paper you did not ask for, describing a graph you have since
+changed, would be worse than none.
+
+**Nothing here writes to the graph.** Not a note, not a status, not a hash, not an
+event. Rendering, compiling and downloading a built draft make no model call at
+all: `bp paper --rebuild`, `/api/paper.source`, `/api/paper.pdf`. Only `bp paper`
+itself and `POST /api/jobs/paper` spend anything, and `bp paper --plan` prices the
+run first — a floor, since the outline decides the section count.
+
+`bp/templates/preamble.tex.j2` is shared by both documents, so
+`render.preamble_facts` — which the Preamble sheet extracts its collision list from
+— cannot end up describing a document nobody renders.
 
 ---
 
@@ -1269,7 +1340,9 @@ question do not collide.
 
 ## 13. The roles
 
-Six of them: `decompose`, `check`, `extract`, `verify`, `audit`, `prove`.
+Seven of them: `decompose`, `check`, `extract`, `verify`, `audit`, `prove`, and
+`paper` — the last one optional, run by hand, and the only one whose output is a
+document rather than a change to the graph (§9b).
 
 Each assembles context deterministically (`bp/roles/context.py` — no model decides
 what a model gets to see), asks for JSON against a pydantic schema, runs the
@@ -1288,7 +1361,7 @@ only reason a clean verdict carries information (§0).
 **It decides whether to decompose at all, first.** The response carries a
 `verdict` — `decompose`, `prove-directly` or `already-atomic` — with an
 `assessed_difficulty` and two sentences of `assessment`. A pydantic validator
-ties the shape to the verdict: `decompose` requires 3–7 children and a reduction
+ties the shape to the verdict: `decompose` requires 1–10 children and a reduction
 proof, the other two require neither, so a decline cannot arrive carrying
 half a decomposition.
 
@@ -1305,7 +1378,15 @@ implementation, and a model that declined a second time returned an empty
 decomposition which was then applied. A forced call that still declines is now a
 `DEC001` warning fed into the ordinary repair round.
 
-When it does decompose: one level. 3–7 children, each a section or a major lemma. The prompt says
+When it does decompose: one level. 1–10 children, each a section or a major lemma;
+three to seven is the usual answer and the prompt says when each end of the range
+is right. One child is legitimate when the node's whole content is a *reduction* to
+a single substantial lemma — refusing it used to force the model to invent two
+siblings it did not believe in — and is wrong when that child is the parent
+restated. Ten is for a long argument with several independent estimates, and is
+wrong when it is one argument cut into paragraphs: each child is verified alone, by
+a reader who sees nothing else, so the middle third of a computation is not a
+lemma. `DECISIONS.md` D062. The prompt also says
 explicitly that the leaves are *expected* to be hard and unproved and that it
 must not attempt provable granularity — without that it goes four levels deep in
 one call and the user spends the afternoon pruning.

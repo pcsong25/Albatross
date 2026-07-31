@@ -87,7 +87,8 @@ graph, the counts, the certificate and the document.
 |---|---|---|
 | **Frontier** | The ranked list of nodes where work is *possible right now*: unfinished, with everything beneath them finished. Columns: node / needs / difficulty / gates / depth. Click a row to select that node. | no |
 | **Recompile…** | Bulk re-verification, with the bill previewed first. See §5.2. | only after you confirm |
-| **Render LaTeX** | The unified `.tex` for the whole graph, plus `.tex` download and PDF. See §5.3. | no |
+| **Render LaTeX** | The unified `.tex` for the whole graph, plus `.tex` download and PDF. Generated from your node files every time; exact. See §5.3. | no |
+| **Paper…** | The optional readable write-up: the same mathematics reorganised by an agent into something a person would want to read. Built only when you press *Write it*; never updated with the graph. See §5.3a. | only when you press *Write it* |
 | **Preamble** | Edit `preamble.tex`, and see how many macros the browser managed to parse out of it. See §5.4. | no |
 | **Check** | Every deterministic check over the whole project, as a diagnostic list. No model is involved in any of it. See §5.5. | no |
 | **Archive** | What is out of the active graph, with a **Bring back** button each. Nothing is ever deleted. | no |
@@ -403,7 +404,9 @@ reassuring `$0.00`. With those, the **call cap** is the only thing limiting a ru
 The unified `.tex` for the whole graph as plain text, regenerated on every request
 — it holds no state and cannot drift from the graph.
 
-- **clean** — omit every marker and all apparatus. This version is the paper.
+- **clean** — omit every marker and all apparatus. Note that this removes the
+  apparatus, not the shape: it is still one numbered node after another in dependency
+  order. For the version written the way a paper is written, see §5.3a.
 - **audit** — add the discharge tables and the claim ledger.
 - **Download .tex** — the source.
 - **Open PDF** — compiles (two `pdflatex` passes, so `\ref` and `\eqref` resolve)
@@ -414,6 +417,56 @@ The unified `.tex` for the whole graph as plain text, regenerated on every reque
 - Warnings appear here too: an unresolved `\ref` (the PDF prints `??`) or a
   duplicated `\label` (one silently wins, so a reference may point at the wrong
   place).
+
+### 5.3a Paper…
+The second document. An agent reads the whole development and rewrites it as a paper
+or a set of notes: hypothesis lists become sentences, routine lemmas move inside the
+proofs that use them, sections are grouped by idea rather than by dependency depth,
+and results are named instead of being referred to by node id.
+
+**It is not the document this system guarantees, and the sheet says so at the top.**
+§5.3 is generated from your node files on every request and is exact. This one was
+written once, by a model. Where they disagree, that one is right.
+
+What the sheet shows, in order:
+
+- **Nothing yet**, if no paper has been built for this project. That is the normal
+  state, not an error.
+- **The header** — title, when it was built, how many calls it cost, and whether it is
+  still current. If the development has moved since, the box turns amber and lists the
+  nodes that were edited, added or archived. Nothing rebuilds automatically: a paper
+  you did not ask for, describing a graph you have since changed, would be worse than
+  no paper.
+- **Every section**, with the nodes it stated outright, the nodes it **merged** into
+  prose (each with the writer's note saying where it went), any **departures** it
+  declared, and — in bold — anything it says it could **not carry over**. Read that
+  last list. It is the honest form of "this translation may lose accuracy".
+- **A section that could not be written** appears in amber and prints as such in the
+  document too, naming the nodes it would have covered. A paper missing three sections
+  must not read as a shorter paper.
+- **Nodes absent from the paper**, if the outline never placed one. They are named in
+  the paper's own appendix as not included.
+- **The writer's reservations**, and any `PAP*` diagnostics re-derived against the
+  graph as it is *now*.
+- **bare** — omit the provenance note and the provenance appendix, for a file going to
+  a journal rather than to you.
+- **A guidance box** — one line about how you want it shaped: *"notes rather than a
+  paper"*, *"put the construction first"*, *"no introduction"*. It reaches both the
+  outline call and every section call.
+- **The bill**, before the button: one call for the outline, then one per section. It
+  is a floor, because the outline decides how many sections there are and a section
+  rejected by the completeness check costs one more call.
+
+Buttons: **Show the LaTeX**, **Download .tex** and **Open PDF** all render from the
+stored draft and make **no model call**, so they are free and repeatable. Only
+**Write it** spends anything, and it replaces the previous draft.
+
+**What the document carries whatever the prose says**, written by code and not by the
+agent: a provenance paragraph under the title; what the development says the target
+rests on; every admitted or assumed statement with its reason; how many statements
+have no verified proof; and an appendix giving, for every node of the development, the
+section that covers it and whether it was stated or merged. When a passage looks
+wrong, that appendix is how you find the node it came from.
 
 ### 5.4 Preamble
 Edits `preamble.tex`, which goes to **three** places: injected into the rendered
@@ -535,6 +588,7 @@ warning, blue = note.
 | `TEX001`–`TEX002` | Authored LaTeX that fails *silently*: a mid-line `%` that deletes the rest of a line, an unbalanced `$`. |
 | `TGT001`–`TGT002` | The target theorem's statement has never been audited, or was audited against earlier wording. |
 | `circular-citation` | Not a `bp check` code but an objection kind: a citation pointing *up* the graph that the verifier judged to be used as a **fact**. The parent's proof rests on this node, so each rests on the other and neither is established. A child may *refer* to a parent's equation; it may never assume it. |
+| `PAP001`–`PAP006` | The paper (§5.3a) only: a node the outline never placed, a node placed twice, a section silent about a node it was given, a stated node with no `\label{paper:<id>}`, a `\ref` to a node that is not in the project, a section that could not be written. None of them says anything about your development — they are about the exposition of it. |
 | `SYS001` | The computed fields in a file are out of date. Harmless; run `bp sweep`. |
 
 `LED005`, `LED006` and `USE001` are warnings on purpose. A real result vaguely
@@ -579,3 +633,8 @@ Deliberate omissions, so you do not go looking:
 - **No partial expansion.** `Expand` refuses a node that already has children;
   `Redo` archives them first.
 - **No un-`Redo`.** The previous subtree is in `attempts/<node>-<n>/`, by hand.
+- **No automatic paper.** The exposition (§5.3a) is never rebuilt as a side effect of
+  an edit, a verification or a render. It would cost a model call every time and would
+  quietly replace a draft you may have been reading.
+- **No editing the paper here.** Download the `.tex` and edit it wherever you write
+  papers. Nothing reads it back: it is a build artifact, not a source.

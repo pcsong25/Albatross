@@ -114,6 +114,15 @@ agents:
       model: claude-sonnet-5
       timeout: 900
 
+    # The optional readable paper (`bp paper`, or Paper… in the browser). One call
+    # that reads the whole development and plans the sections, then one call per
+    # section. Run rarely and by hand, so it can afford your best model — and it is
+    # the role least harmed by a slow subscription CLI, since nothing waits on it.
+    writer:
+      backend: claude_api
+      model: claude-opus-5
+      timeout: 1800
+
   # Who reads a whole proof. Every name must be a configured role above. Two is the
   # design — from different families — but you can add a third reader or drop to one.
   # An empty list is refused: nobody would read a proof and nothing could be verified.

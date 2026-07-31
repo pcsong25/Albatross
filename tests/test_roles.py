@@ -206,11 +206,21 @@ class TestDecompose:
         assert "user's guidance" in prompt
 
     def test_schema_bounds_the_child_count(self):
+        """1–10. One is a reduction to a single lemma, which is legitimate; nought is
+        `already-atomic` and eleven is paragraphs pretending to be lemmas."""
         from pydantic import ValidationError
 
-        too_few = decomposition(slugs=("a", "b"))
+        assert decompose_role.Decomposition(**decomposition(slugs=("a",))).decomposing
+        assert decompose_role.Decomposition(
+            **decomposition(slugs=tuple(f"s{i}" for i in range(10)))
+        ).decomposing
+
         with pytest.raises(ValidationError):
-            decompose_role.Decomposition(**too_few)
+            decompose_role.Decomposition(**decomposition(slugs=()))
+        with pytest.raises(ValidationError):
+            decompose_role.Decomposition(
+                **decomposition(slugs=tuple(f"s{i}" for i in range(11)))
+            )
 
 
 class TestTriage:

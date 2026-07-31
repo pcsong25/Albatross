@@ -40,6 +40,15 @@ from . import context
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
+#: How many children a `decompose` verdict may propose. One is allowed because a
+#: reduction to a single substantial lemma is a real decomposition — the content is
+#: the reduction — and refusing it forced the model to invent two siblings it did not
+#: believe in. Ten because a long argument with many independent estimates is an
+#: ordinary shape for a real theorem. The prompt says when each end is right; the
+#: bound only stops the two degenerate answers (nothing, and a hundred paragraphs).
+MIN_CHILDREN = 1
+MAX_CHILDREN = 10
+
 
 class HypothesisSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -100,7 +109,7 @@ class Decomposition(BaseModel):
     strategy: str = Field(
         default="", description="one line naming the shape of the argument"
     )
-    children: list[ProposedChild] = Field(default_factory=list, max_length=7)
+    children: list[ProposedChild] = Field(default_factory=list, max_length=MAX_CHILDREN)
     reduction_proof: str = Field(
         default="",
         description="the parent's proof, citing each child by `slug` in backticks. "
@@ -118,10 +127,11 @@ class Decomposition(BaseModel):
     @model_validator(mode="after")
     def _shape_matches_verdict(self) -> "Decomposition":
         if self.verdict == "decompose":
-            if not 3 <= len(self.children) <= 7:
+            if not MIN_CHILDREN <= len(self.children) <= MAX_CHILDREN:
                 raise ValueError(
-                    "a `decompose` verdict needs between 3 and 7 children; return "
-                    "`prove-directly` or `already-atomic` if it does not deserve that many"
+                    f"a `decompose` verdict needs between {MIN_CHILDREN} and "
+                    f"{MAX_CHILDREN} children; return `prove-directly` or "
+                    "`already-atomic` if the node does not deserve any"
                 )
             if not self.reduction_proof.strip():
                 raise ValueError("a `decompose` verdict needs a reduction_proof")
@@ -215,7 +225,7 @@ You have already judged this node not worth decomposing, and the mathematician
 has asked for a decomposition anyway. They can see your reasoning and have
 decided otherwise; it is their problem and their call.
 
-Return `verdict: "decompose"` with between 3 and 7 children, a reduction proof
+Return `verdict: "decompose"` with between 1 and 10 children, a reduction proof
 and a complete `uses` table. If the natural split is into few, small pieces, say
 so in `notes` — but produce the decomposition."""
 
