@@ -28,7 +28,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 from ruamel.yaml import YAML
-from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
 from ..load import atomic_write
 from ..paths import Project
@@ -232,6 +232,28 @@ ROLE_NOTES: dict[str, str] = {
 }
 
 
+def _flowed(value: Any) -> Any:
+    """Copy a plain value, asking ruamel to emit any list inline.
+
+    A backend's ``command`` is written by hand as ``[codex, exec, --model, …]`` in
+    every one of these files. Handed a plain Python list ruamel emits it as a block
+    sequence — one item per line — so a role added by ``--fill`` looked nothing like
+    the ten above it in the user's own file. Style is not cosmetic in a file the user
+    maintains: a block that does not match its neighbours reads as machine-generated
+    and therefore as not theirs to edit.
+    """
+    if isinstance(value, dict):
+        out = CommentedMap()
+        for key, item in value.items():
+            out[key] = _flowed(item)
+        return out
+    if isinstance(value, list):
+        seq = CommentedSeq(_flowed(item) for item in value)
+        seq.fa.set_flow_style()
+        return seq
+    return value
+
+
 def fill_missing_roles(project: Project) -> tuple[list[str], Path]:
     """Write every unconfigured role into ``bp.yaml``, and return which ones.
 
@@ -267,8 +289,13 @@ def fill_missing_roles(project: Project) -> tuple[list[str], Path]:
         entry["backend"] = spec.backend
         entry["model"] = spec.model
         if spec.options:
-            entry["options"] = spec.options
-        entry["timeout"] = spec.timeout
+            entry["options"] = _flowed(spec.options)
+        # `3600`, not `3600.0`. The field is a float because a timeout may sensibly be
+        # fractional, but every hand-written value in these files is a whole number of
+        # seconds and the `.0` reads as though the tool knows something you do not.
+        entry["timeout"] = (
+            int(spec.timeout) if float(spec.timeout).is_integer() else spec.timeout
+        )
         roles[name] = entry
         note = ROLE_NOTES.get(name)
         source = resolved.provenance.get(name, "")

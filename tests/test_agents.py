@@ -613,6 +613,25 @@ budget:
         assert "TRANSLATION, not judgement" in text     # extractor
         assert "added by `bp agents --fill`" in text
 
+    def test_what_it_writes_matches_the_style_of_what_is_there(self, tmp_path):
+        """A block that does not look like its neighbours reads as machine output, and
+        therefore as not the user's to edit — in the one file they are meant to edit.
+
+        Two specifics, both seen on a real project: ruamel emits a plain Python list as
+        a block sequence, so an inherited `command` came out one item per line beneath
+        ten hand-written `[codex, exec, …]` lines; and `timeout` is a float field, so it
+        came out `2400.0` where every hand-written value is a whole number.
+        """
+        from bp.agents.registry import fill_missing_roles
+
+        project = self._project(tmp_path, self.ORIGINAL)
+        fill_missing_roles(project)
+        text = (tmp_path / "bp.yaml").read_text()
+        assert "command: [codex, exec, --model, gpt-5.6-sol]" in text
+        assert "- codex" not in text        # not a block sequence
+        assert "timeout: 2400\n" in text
+        assert "2400.0" not in text
+
     def test_running_it_twice_changes_nothing(self, tmp_path):
         from bp.agents.registry import fill_missing_roles
 
