@@ -20,3 +20,8 @@ build/
 # for working offline; the page falls back to a CDN when they are absent. Third-
 # party minified builds and fonts do not belong in a mathematics project's history.
 bp/ui/static/vendor/
+
+# Kept locally, not published: the working notes for coding agents, and the
+# example's model call log (the exact prompt and reply of every call).
+/CLAUDE.md
+**/.bp/agent/

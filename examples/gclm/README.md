@@ -61,22 +61,13 @@ bp show gclm.elb-a # a node in full, including its verification record
 
 All of the above are deterministic: no API key, no network, no model calls.
 
-`.bp/agent/` holds the 38 calls the L1 and L2 acceptance runs actually made, which is
-worth reading — it is the exact prompt and the exact reply for every model call that
-produced part of this fixture:
-
 ```bash
-bp calls                     # a summary by role
-bp calls --show <hash>       # one call in full: what was asked, what came back
 bp events                    # every mutation, with its actor
 ```
 
-**`--replay` will mostly miss on these now.** The log is keyed on a hash of the prompt,
-and the prompts have since changed — the verifier is given cross-reference context, the
-decomposer is told about the circularity rule, and so on. A miss is a loud
-`ReplayMiss` rather than a silent fall-through to the network, which is the intended
-behaviour: a replay run that quietly reached a provider would stop being either free or
-reproducible.
+The model call log (`.bp/agent/`) from the runs that produced this fixture is **not
+included**, so `bp calls` reports nothing here and `--replay` has nothing to replay. In a
+project of your own, every model call is logged there with its exact prompt and reply.
 
 `bp.yaml` here is the configuration those runs actually used — every role on GPT-5.6 Sol
 through the Codex CLI. It is a worked example of pointing the whole system at one
