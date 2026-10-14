@@ -2,6 +2,10 @@
 name = "albatross-bp"
 version = "0.1.0"
 description = "Albatross / Blueprint v0 — an interactive proof-decomposition assistant"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "Peicong Song"}]
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2",
@@ -18,6 +22,10 @@ dependencies = [
     "openai",
 ]
 
+[project.urls]
+Homepage = "https://github.com/pcsong25/Albatross"
+Documentation = "https://github.com/pcsong25/Albatross/blob/main/GUIDE.md"
+
 [project.optional-dependencies]
 dev = ["pytest"]
 
@@ -25,7 +33,7 @@ dev = ["pytest"]
 bp = "bp.cli:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]

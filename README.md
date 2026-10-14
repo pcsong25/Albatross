@@ -1,5 +1,8 @@
 # Albatross
 
+[![tests](https://github.com/pcsong25/Albatross/actions/workflows/tests.yml/badge.svg)](https://github.com/pcsong25/Albatross/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 **An interactive proof-decomposition assistant for research mathematics.**
 
 You are trying to prove a theorem. You break it into lemmas, break those into
@@ -43,10 +46,10 @@ Requires **Python 3.12+**. A LaTeX installation is optional but wanted — witho
 one you get the `.tex` source and no PDF.
 
 ```bash
-git clone <this repo> albatross && cd albatross
+git clone https://github.com/pcsong25/Albatross.git albatross && cd albatross
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
-.venv/bin/python -m pytest -q        # 598 tests, no network, no API key
+.venv/bin/python -m pytest -q        # ~700 tests, no network, no API key
 ```
 
 `bp` is then on the venv's path. Either activate the venv or use
@@ -242,4 +245,4 @@ systematically, against live models.
 
 ## License
 
-TODO — pick one before publishing. Until then, all rights reserved.
+[MIT](LICENSE).

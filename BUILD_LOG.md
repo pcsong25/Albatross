@@ -855,8 +855,8 @@ twice. A tool for avoiding collisions that invents one.
 ### Every backend adjustable, and the file made complete
 
 The user checked and said the four roles *were* in their `bp.yaml`. They were — in
-`/Users/peicong/Albatross/bp.yaml`, the repo's own config, which their IDE had open.
-The file `bp` reads for their project is `/Users/peicong/my-theorem/bp.yaml`, and that
+`~/Albatross/bp.yaml`, the repo's own config, which their IDE had open.
+The file `bp` reads for their project is `~/my-theorem/bp.yaml`, and that
 one had five roles. Two files with the same name, and the wrong one is the more
 plausible thing to be looking at. Worth a line in the docs.
 
